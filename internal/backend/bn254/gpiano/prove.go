@@ -450,6 +450,7 @@ func ProveCommon(fs *fiatshamir.Transcript,
 		betaShifted,
 		globalSRS,
 	)
+	log.Debug().Dur("took", time.Since(start)).Msg("prover done")
 	if err != nil {
 		return nil, err
 	}
