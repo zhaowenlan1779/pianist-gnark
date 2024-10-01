@@ -102,20 +102,50 @@ func Prove(spr *cs.SparseR1CS, pk *ProvingKey, fullWitness bn254witness.Witness,
 	}
 
 	fmt.Println("Solution computed")
-	fmt.Println("Prover started")
-	log := logger.Logger().With().Str("curve", spr.CurveID().String()).Int("nbConstraints", len(spr.Constraints)).Str("backend", "gpiano").Logger()
-	start := time.Now()
+
+	// pick a hash function that will be used to derive the challenges
+	hFunc := sha256.New()
+
+	// create a transcript manager to apply Fiat Shamir
+	fs := fiatshamir.NewTranscript(hFunc, "gamma", "etaY", "etaX", "lambda", "alpha", "beta")
+	
+	// query L, R, O in Lagrange basis, not blinded
+	lSmallX, rSmallX, oSmallX := evaluateLROSmallDomainX(spr, pk, solution)
+
+	return ProveCommon(&fs, pk, lSmallX, rSmallX, oSmallX, fullWitness[:spr.NbPublicVariables], opt)
+}
+
+func ProveDirect(pk *ProvingKey,
+	lSmallX []fr.Element,
+	rSmallX []fr.Element,
+	oSmallX []fr.Element,
+	publicInput []fr.Element,
+	opt backend.ProverConfig) (*Proof, error) {
 	// pick a hash function that will be used to derive the challenges
 	hFunc := sha256.New()
 
 	// create a transcript manager to apply Fiat Shamir
 	fs := fiatshamir.NewTranscript(hFunc, "gamma", "etaY", "etaX", "lambda", "alpha", "beta")
 
+	return ProveCommon(&fs, pk, lSmallX, rSmallX, oSmallX, publicInput, opt)
+}
+
+func ProveCommon(fs *fiatshamir.Transcript,
+	pk *ProvingKey,
+	lSmallX []fr.Element,
+	rSmallX []fr.Element,
+	oSmallX []fr.Element,
+	publicInput []fr.Element,
+	opt backend.ProverConfig) (*Proof, error) {
+	var err error
+	fmt.Println("Prover started")
+	log := logger.Logger().With().Str("backend", "gpiano").Logger()
+	start := time.Now()
+	// pick a hash function that will be used to derive the challenges
+	hFunc := sha256.New()
+
 	// result
 	proof := &Proof{}
-
-	// query L, R, O in Lagrange basis, not blinded
-	lSmallX, rSmallX, oSmallX := evaluateLROSmallDomainX(spr, pk, solution)
 
 	// save lL, lR, lO, and make a copy of them in
 	// canonical basis note that we allocate more capacity to reuse for blinded
@@ -126,9 +156,6 @@ func Prove(spr *cs.SparseR1CS, pk *ProvingKey, fullWitness bn254witness.Witness,
 		oSmallX,
 		&pk.Domain[0],
 	)
-	if err != nil {
-		return nil, err
-	}
 
 	// compute kzg commitments of bcL, bcR and bcO
 	if err := commitToLRO(lCanonicalX, rCanonicalX, oCanonicalX, proof, pk.Vk.DKZGSRS); err != nil {
@@ -138,22 +165,22 @@ func Prove(spr *cs.SparseR1CS, pk *ProvingKey, fullWitness bn254witness.Witness,
 	// The first challenge is derived using the public data: the commitments to the permutation,
 	// the coefficients of the circuit, and the public inputs.
 	// derive gamma from the Comm(cL), Comm(cR), Comm(cO)
-	if err := bindPublicData(&fs, "gamma", *pk.Vk, fullWitness[:spr.NbPublicVariables]); err != nil {
+	if err := bindPublicData(fs, "gamma", *pk.Vk, publicInput); err != nil {
 		return nil, err
 	}
-	gamma, err := deriveRandomness(&fs, "gamma", false, &proof.LRO[0], &proof.LRO[1], &proof.LRO[2])
+	gamma, err := deriveRandomness(fs, "gamma", false, &proof.LRO[0], &proof.LRO[1], &proof.LRO[2])
 	if err != nil {
 		return nil, err
 	}
 
 	// Fiat Shamir this
-	etaY, err := deriveRandomness(&fs, "etaY", false)
+	etaY, err := deriveRandomness(fs, "etaY", false)
 	if err != nil {
 		return nil, err
 	}
 
 	// Fiat Shamir this
-	etaX, err := deriveRandomness(&fs, "etaX", false)
+	etaX, err := deriveRandomness(fs, "etaX", false)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +219,7 @@ func Prove(spr *cs.SparseR1CS, pk *ProvingKey, fullWitness bn254witness.Witness,
 	}
 
 	// derive lambda from the Comm(L), Comm(R), Comm(O), Com(Z)
-	lambda, err := deriveRandomness(&fs, "lambda", false, &proof.Z, &proof.W)
+	lambda, err := deriveRandomness(fs, "lambda", false, &proof.Z, &proof.W)
 	if err != nil {
 		return nil, err
 	}
@@ -207,7 +234,7 @@ func Prove(spr *cs.SparseR1CS, pk *ProvingKey, fullWitness bn254witness.Witness,
 	}
 
 	// derive alpha
-	alpha, err := deriveRandomness(&fs, "alpha", false, &proof.Hx[0], &proof.Hx[1], &proof.Hx[2], &proof.Hx[3])
+	alpha, err := deriveRandomness(fs, "alpha", false, &proof.Hx[0], &proof.Hx[1], &proof.Hx[2], &proof.Hx[3])
 	if err != nil {
 		return nil, err
 	}
@@ -358,7 +385,7 @@ func Prove(spr *cs.SparseR1CS, pk *ProvingKey, fullWitness bn254witness.Witness,
 	for _, digest := range proof.Hy {
 		ts = append(ts, &digest)
 	}
-	beta, err := deriveRandomness(&fs, "beta", true, ts...)
+	beta, err := deriveRandomness(fs, "beta", true, ts...)
 	if err != nil {
 		return nil, err
 	}

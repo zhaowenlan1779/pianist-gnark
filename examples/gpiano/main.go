@@ -23,98 +23,39 @@ import (
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
 	"github.com/consensys/gnark/backend/gpiano"
-	"github.com/consensys/gnark/frontend/cs/scs"
+	"github.com/consensys/gnark/backend/witness"
 	"github.com/sunblaze-ucb/simpleMPI/mpi"
 
-	"github.com/consensys/gnark/frontend"
+	"github.com/consensys/gnark/backend"
+	gpiano_bn254 "github.com/consensys/gnark/internal/backend/bn254/gpiano"
+	witness_bn254 "github.com/consensys/gnark/internal/backend/bn254/witness"
 )
 
 // In this example we show how to use PLONK with KZG commitments. The circuit that is
 // showed here is the same as in ../exponentiate.
 
-// Circuit y == x**e
-// only the bitSize least significant bits of e are used
-type Circuit struct {
-	// tagging a variable is optional
-	// default uses variable name and secret visibility.
-	X frontend.Variable `gnark:",public"`
-	Y frontend.Variable `gnark:",public"`
-
-	E frontend.Variable
-}
-
-// Define declares the circuit's constraints
-// y == x**e
-func (circuit *Circuit) Define(api frontend.API) error {
-
-	// number of bits of exponent
-	const bitSize = 4000
-
-	// specify constraints
-	output := frontend.Variable(1)
-	bits := api.ToBinary(circuit.E, bitSize)
-
-	for i := 0; i < len(bits); i++ {
-		// api.Println(fmt.Sprintf("e[%d]", i), bits[i]) // we may print a variable for testing and / or debugging purposes
-
-		if i != 0 {
-			output = api.Mul(output, output)
-		}
-		multiply := api.Mul(output, circuit.X)
-		output = api.Select(bits[len(bits)-1-i], multiply, output)
-
-	}
-
-	api.AssertIsEqual(circuit.Y, output)
-
-	return nil
-}
-
 func main() {
-
-	var circuit Circuit
-
-	// // building the circuit...
-	ccs, err := frontend.Compile(ecc.BN254, scs.NewBuilder, &circuit)
-	if err != nil {
-		fmt.Println("circuit compilation error")
-	}
+	nv := 22
+	numPublicInput := 4
 
 	// Correct data: the proof passes
 	{
-		// Witnesses instantiation. Witness is known only by the prover,
-		// while public w is a public data known by the verifier.
-		var w Circuit
-		w.X = 12
-		w.E = 2
-		w.Y = 144
-
-		witnessFull, err := frontend.NewWitness(&w, ecc.BN254)
+		pk, vk, witnesses, err := gpiano_bn254.SetupRandom(ecc.BN254, 1<<nv, numPublicInput)
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		witnessPublic, err := frontend.NewWitness(&w, ecc.BN254, frontend.PublicOnly())
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		// public data consists the polynomials describing the constants involved
-		// in the constraints, the polynomial describing the permutation ("grand
-		// product argument"), and the FFT domains.
-		pk, vk, err := gpiano.Setup(ccs, witnessPublic)
-		//_, err := gpiano.Setup(r1cs, kate, &publicWitness)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		proof, err := gpiano.Prove(ccs, pk, witnessFull)
+		opt, err := backend.NewProverConfig()
+		proof, err := gpiano_bn254.ProveDirect(pk, witnesses[0], witnesses[1], witnesses[2], witnesses[0][:numPublicInput], opt)
 		if err != nil {
 			log.Fatal(err)
 		}
 
 		if mpi.SelfRank == 0 {
-			err = gpiano.Verify(proof, vk, witnessPublic)
+			publicWitness := witness_bn254.New(witnesses[0][:numPublicInput])
+			err = gpiano.Verify(proof, vk, &witness.Witness{
+				Vector: &publicWitness,
+			})
 			if err != nil {
 				log.Fatal(err)
 			}

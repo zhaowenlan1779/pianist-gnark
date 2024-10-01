@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"math/big"
 
+	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
 	"github.com/consensys/gnark-crypto/ecc/bn254/fr/dkzg"
 	"github.com/consensys/gnark-crypto/ecc/bn254/fr/fft"
@@ -315,6 +316,218 @@ func Setup(spr *cs.SparseR1CS, publicWitness bn254witness.Witness) (*ProvingKey,
 	}
 
 	return &pk, &vk, nil
+}
+
+func SetupRandom(curveID ecc.ID, nbConstraints int, nbPublicInputs int) (*ProvingKey, *VerifyingKey, [][]fr.Element, error) {
+	globalDomain[0] = fft.NewDomain(mpi.WorldSize)
+	if globalDomain[0].Cardinality != mpi.WorldSize {
+		return nil, nil, nil, fmt.Errorf("mpi.WorldSize is not a power of 2")
+	}
+	globalDomain[1] = fft.NewDomain(4 * mpi.WorldSize)
+
+	var pk ProvingKey
+	var vk VerifyingKey
+
+	// The verifying key shares data with the proving key
+	pk.Vk = &vk
+
+	// fft domains
+	sizeSystem := int(nbConstraints) // spr.NbPublicVariables is for the placeholder constraints
+	sizeSystem = (sizeSystem + int(mpi.WorldSize) - 1) / int(mpi.WorldSize)
+
+	pk.Domain[0] = *fft.NewDomain(uint64(sizeSystem))
+	pk.Vk.CosetShift.Set(&pk.Domain[0].FrMultiplicativeGen)
+
+	var t, s *big.Int
+	var err error
+	if mpi.SelfRank == 0 {
+		var one fr.Element
+		one.SetOne()
+		for {
+			t, err = rand.Int(rand.Reader, curveID.ScalarField())
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			var ele fr.Element
+			ele.SetBigInt(t)
+			if !ele.Exp(ele, big.NewInt(int64(globalDomain[0].Cardinality))).Equal(&one) {
+				break
+			}
+		}
+		for {
+			s, err = rand.Int(rand.Reader, curveID.ScalarField())
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			var ele fr.Element
+			ele.SetBigInt(s)
+			if !ele.Exp(ele, big.NewInt(int64(pk.Domain[0].Cardinality))).Equal(&one) {
+				break
+			}
+		}
+		// send t and s to all other processes
+		tByteLen := (t.BitLen() + 7) / 8
+		sByteLen := (s.BitLen() + 7) / 8
+		for i := uint64(1); i < mpi.WorldSize; i++ {
+			if err := mpi.SendBytes([]byte{byte(tByteLen)}, i); err != nil {
+				return nil, nil, nil, err
+			}
+			if err := mpi.SendBytes(t.Bytes(), i); err != nil {
+				return nil, nil, nil, err
+			}
+			if err := mpi.SendBytes([]byte{byte(sByteLen)}, i); err != nil {
+				return nil, nil, nil, err
+			}
+			if err := mpi.SendBytes(s.Bytes(), i); err != nil {
+				return nil, nil, nil, err
+			}
+		}
+		globalSRS, err = kzg.NewSRS(globalDomain[0].Cardinality, t)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	} else {
+		tByteLen, err := mpi.ReceiveBytes(1, 0)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		tbytes, err := mpi.ReceiveBytes(uint64(tByteLen[0]), 0)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		t = new(big.Int).SetBytes(tbytes)
+		sByteLen, err := mpi.ReceiveBytes(1, 0)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		sbytes, err := mpi.ReceiveBytes(uint64(sByteLen[0]), 0)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		s = new(big.Int).SetBytes(sbytes)
+	}
+	vk.KZGSRS = globalSRS
+
+	// h, the quotient polynomial is of degree 3(n+1)+2, so it's in a 3(n+2) dim vector space,
+	// the domain is the next power of 2 superior to 3(n+2). 4*domainNum is enough in all cases
+	// except when n<6.
+	pk.Domain[1] = *fft.NewDomain(uint64(4 * sizeSystem))
+
+	vk.SizeY = globalDomain[0].Cardinality
+	vk.SizeYInv = globalDomain[0].CardinalityInv
+	vk.SizeX = pk.Domain[0].Cardinality
+	vk.SizeXInv = pk.Domain[0].CardinalityInv
+	vk.GeneratorY.Set(&globalDomain[0].Generator)
+	vk.GeneratorX.Set(&pk.Domain[0].Generator)
+	vk.GeneratorXInv.Set(&pk.Domain[0].GeneratorInv)
+	vk.NbPublicVariables = uint64(nbPublicInputs)
+
+	dkzgSRS, err := dkzg.NewSRS(vk.SizeX+3, []*big.Int{t, s}, &globalDomain[0].Generator)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if err := pk.InitKZG(dkzgSRS); err != nil {
+		return nil, nil, nil, err
+	}
+
+	// public polynomials corresponding to constraints: [ placholders | constraints | assertions ]
+	pk.Ql = make([]fr.Element, pk.Domain[0].Cardinality)
+	pk.Qr = make([]fr.Element, pk.Domain[0].Cardinality)
+	pk.Qm = make([]fr.Element, pk.Domain[0].Cardinality)
+	pk.Qo = make([]fr.Element, pk.Domain[0].Cardinality)
+	pk.Qk = make([]fr.Element, pk.Domain[0].Cardinality)
+	pk.PermutationX = make([]int64, 3 * pk.Domain[0].Cardinality)
+	pk.PermutationY = make([]int64, 3 * pk.Domain[0].Cardinality)
+	witnessesL := make([]fr.Element, pk.Domain[0].Cardinality)
+	witnessesR := make([]fr.Element, pk.Domain[0].Cardinality)
+	witnessesO := make([]fr.Element, pk.Domain[0].Cardinality)
+
+	sizeSystem = int(pk.Domain[0].Cardinality)
+	start := int(mpi.SelfRank) * sizeSystem
+	end := start + sizeSystem
+	if end > nbConstraints {
+		end = nbConstraints
+	}
+	var prodL, prodR, prodM, prodO fr.Element
+	for i := start; i < end; i++ { // constraints
+		j := i % sizeSystem
+		witnessesL[j].SetRandom()
+		witnessesR[j].SetRandom()
+		witnessesO[j].SetRandom()
+		pk.Ql[j].SetRandom()
+		pk.Qr[j].SetRandom()
+		pk.Qm[j].SetRandom()
+		pk.Qo[j].SetRandom()
+
+		prodL.Mul(&pk.Ql[j], &witnessesL[j])
+		prodR.Mul(&pk.Qr[j], &witnessesR[j])
+		prodO.Mul(&pk.Qo[j], &witnessesO[j])
+		prodM.Mul(&pk.Qm[j], &witnessesL[j]).Mul(&prodM, &witnessesR[j])
+		pk.Qk[j].SetZero().Sub(&pk.Qk[j], &prodL).Sub(&pk.Qk[j], &prodR).Sub(&pk.Qk[j], &prodO).Sub(&pk.Qk[j], &prodM)	
+	}
+
+	for i := start; i < end; i++ {
+		j := i % sizeSystem
+		pk.PermutationX[j] = int64(j)
+		pk.PermutationY[j] = int64(mpi.SelfRank)
+
+		pk.PermutationX[j + sizeSystem] = int64(j + sizeSystem)
+		pk.PermutationY[j + sizeSystem] = int64(mpi.SelfRank)
+
+		pk.PermutationX[j + 2 * sizeSystem] = int64(j + 2 * sizeSystem)
+		pk.PermutationY[j + 2 * sizeSystem] = int64(mpi.SelfRank)
+	}
+
+	pk.Domain[0].FFTInverse(pk.Ql, fft.DIF)
+	pk.Domain[0].FFTInverse(pk.Qr, fft.DIF)
+	pk.Domain[0].FFTInverse(pk.Qm, fft.DIF)
+	pk.Domain[0].FFTInverse(pk.Qo, fft.DIF)
+	pk.Domain[0].FFTInverse(pk.Qk, fft.DIF)
+	fft.BitReverse(pk.Ql)
+	fft.BitReverse(pk.Qr)
+	fft.BitReverse(pk.Qm)
+	fft.BitReverse(pk.Qo)
+	fft.BitReverse(pk.Qk)
+
+	// set s1, s2, s3
+	ccomputePermutationPolynomials(&pk)
+
+	// Commit to the polynomials to set up the verifying key
+	if vk.Ql, err = dkzg.Commit(pk.Ql, vk.DKZGSRS); err != nil {
+		return nil, nil, nil, err
+	}
+	if vk.Qr, err = dkzg.Commit(pk.Qr, vk.DKZGSRS); err != nil {
+		return nil, nil, nil, err
+	}
+	if vk.Qm, err = dkzg.Commit(pk.Qm, vk.DKZGSRS); err != nil {
+		return nil, nil, nil, err
+	}
+	if vk.Qo, err = dkzg.Commit(pk.Qo, vk.DKZGSRS); err != nil {
+		return nil, nil, nil, err
+	}
+	if vk.Qk, err = dkzg.Commit(pk.Qk, vk.DKZGSRS); err != nil {
+		return nil, nil, nil, err
+	}
+	if vk.Sy[0], err = dkzg.Commit(pk.Sy1Canonical, vk.DKZGSRS); err != nil {
+		return nil, nil, nil, err
+	}
+	if vk.Sy[1], err = dkzg.Commit(pk.Sy2Canonical, vk.DKZGSRS); err != nil {
+		return nil, nil, nil, err
+	}
+	if vk.Sy[2], err = dkzg.Commit(pk.Sy3Canonical, vk.DKZGSRS); err != nil {
+		return nil, nil, nil, err
+	}
+	if vk.Sx[0], err = dkzg.Commit(pk.Sx1Canonical, vk.DKZGSRS); err != nil {
+		return nil, nil, nil, err
+	}
+	if vk.Sx[1], err = dkzg.Commit(pk.Sx2Canonical, vk.DKZGSRS); err != nil {
+		return nil, nil, nil, err
+	}
+	if vk.Sx[2], err = dkzg.Commit(pk.Sx3Canonical, vk.DKZGSRS); err != nil {
+		return nil, nil, nil, err
+	}
+
+	return &pk, &vk, [][]fr.Element{witnessesL, witnessesR, witnessesO}, nil
 }
 
 // buildPermutation builds the Permutation associated with a circuit.

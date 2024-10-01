@@ -32,6 +32,10 @@ import (
 
 type Witness []fr.Element
 
+func New(arr []fr.Element) Witness {
+	return arr
+}
+
 // WriteTo encodes witness to writer (implements io.WriterTo)
 func (witness *Witness) WriteTo(w io.Writer) (int64, error) {
 	// encode slice length
