@@ -54,7 +54,11 @@ func Verify(proof *Proof, vk *VerifyingKey, publicWitness bn254witness.Witness) 
 	if err := bindPublicData(&fs, "gamma", *vk, publicWitness); err != nil {
 		return err
 	}
-	gamma, err := deriveRandomness(&fs, "gamma", true, &proof.LRO[0], &proof.LRO[1], &proof.LRO[2])
+	witnessPtrs := make([]*curve.G1Affine, len(proof.witnesses))
+	for i := 0; i < len(proof.witnesses); i++ {
+		witnessPtrs[i] = &proof.witnesses[i]
+	}
+	gamma, err := deriveRandomness(&fs, "gamma", false, witnessPtrs...)
 	if err != nil {
 		return err
 	}
@@ -101,11 +105,9 @@ func Verify(proof *Proof, vk *VerifyingKey, publicWitness bn254witness.Witness) 
 
 	digests := []dkzg.Digest{
 		foldedHxDigest,
-		proof.LRO[0],
-		proof.LRO[1],
-		proof.LRO[2],
 		proof.Z,
 	}
+	digests = append(digests, proof.witnesses...)
 	digests = append(digests, vk.Q...)
 	digests = append(digests, vk.Sy...)
 	digests = append(digests, vk.Sx...)
@@ -287,50 +289,51 @@ func deriveRandomness(fs *fiatshamir.Transcript, challenge string, notSend bool,
 func checkConstraintY(vk *VerifyingKey, evalsYOnBeta []fr.Element, ws, etaY, etaX, gamma, lambda, alpha, beta fr.Element) error {
 	// unpack vector evalsXOnAlpha on l, r, o, ql, qr, qm, qo, qk, s1, s2, s3, z, zmu
 	hx := evalsYOnBeta[0]
-	l := evalsYOnBeta[1]
-	r := evalsYOnBeta[2]
-	o := evalsYOnBeta[3]
-	z := evalsYOnBeta[4]
-	q := append([]fr.Element(nil), evalsYOnBeta[5:5+len(vk.Q)]...)
-	sy := append([]fr.Element(nil), evalsYOnBeta[5+len(vk.Q):5+len(vk.Q)+len(vk.Sy)]...)
-	sx := append([]fr.Element(nil), evalsYOnBeta[5+len(vk.Q)+len(vk.Sy):5+len(vk.Q)+len(vk.Sy)+len(vk.Sx)]...)
-	offset := 5 + len(vk.Q) + len(vk.Sy) + len(vk.Sx)
+	z := evalsYOnBeta[1]
+	witnesses := append([]fr.Element(nil), evalsYOnBeta[2:2+len(vk.Sy)]...)
+	q := append([]fr.Element(nil), evalsYOnBeta[2+len(witnesses):2+len(witnesses)+len(vk.Q)]...)
+	sy := append([]fr.Element(nil), evalsYOnBeta[2+len(witnesses)+len(vk.Q):2+len(witnesses)+len(vk.Q)+len(vk.Sy)]...)
+	sx := append([]fr.Element(nil), evalsYOnBeta[2+len(witnesses)+len(vk.Q)+len(vk.Sy):2+len(witnesses)+len(vk.Q)+len(vk.Sy)+len(vk.Sx)]...)
+	offset := 2+len(witnesses) + len(vk.Q) + len(vk.Sy) + len(vk.Sx)
 	zs := evalsYOnBeta[offset]
 	w := evalsYOnBeta[offset + 1]
 	hy := evalsYOnBeta[offset + 2]
 	// first part: individual constraints
 	var firstPart fr.Element
-	q[0].Mul(&q[0], &l)
-	q[1].Mul(&q[1], &r)
-	q[2].Mul(&q[2], &l).Mul(&q[2], &r)
-	q[3].Mul(&q[3], &o)
+	q[0].Mul(&q[0], &witnesses[0])
+	q[1].Mul(&q[1], &witnesses[1])
+	q[2].Mul(&q[2], &witnesses[0]).Mul(&q[2], &witnesses[1])
+	q[3].Mul(&q[3], &witnesses[2])
 	firstPart.Add(&q[0], &q[1]).Add(&firstPart, &q[2]).Add(&firstPart, &q[3]).Add(&firstPart, &q[4])
 
 	// second part:
 	// (1 - L_{n - 1})(z(, omegaX * alpha)()()() - z(, alpha)()()())
 	// + L_{n - 1}(cw * ()()() - pw * z(, alpha)()()())
 	var prodfz, prodg fr.Element
-	sy[0].Mul(&sy[0], &etaY)
-	sy[1].Mul(&sy[1], &etaY)
-	sy[2].Mul(&sy[2], &etaY)
-	sx[0].Mul(&sx[0], &etaX).Add(&sx[0], &sy[0]).Add(&sx[0], &l).Add(&sx[0], &gamma)
-	sx[1].Mul(&sx[1], &etaX).Add(&sx[1], &sy[1]).Add(&sx[1], &r).Add(&sx[1], &gamma)
-	sx[2].Mul(&sx[2], &etaX).Add(&sx[2], &sy[2]).Add(&sx[2], &o).Add(&sx[2], &gamma)
-	prodg.Mul(&sx[0], &sx[1]).Mul(&prodg, &sx[2])
+	for i := 0; i < len(sy); i++ {
+		sy[i].Mul(&sy[i], &etaY)
+		sx[i].Mul(&sx[i], &etaX).Add(&sx[i], &sy[i]).Add(&sx[i], &witnesses[i]).Add(&sx[i], &gamma)
+	}
+	prodg.Set(&sx[0])
+	for i := 1; i < len(sx); i++ {
+		prodg.Mul(&prodg, &sx[i])
+	}
 
-	var alphaEta, ualphaEta, uualphaEta fr.Element
-	alphaEta.Mul(&alpha, &etaX)
-	ualphaEta.Mul(&alphaEta, &vk.CosetShift)
-	uualphaEta.Mul(&ualphaEta, &vk.CosetShift)
+	IDEtaXShifted := make([]fr.Element, len(sy))
+	IDEtaXShifted[0].Mul(&alpha, &etaX)
+	for i := 1; i < len(IDEtaXShifted); i++ {
+		IDEtaXShifted[i].Mul(&IDEtaXShifted[i - 1], &vk.CosetShift)
+	}
 
 	var betaEta fr.Element
 	betaEta.Mul(&beta, &etaY)
+
+	prodfz.Set(&z)
 	var tmp fr.Element
-	prodfz.Add(&alphaEta, &betaEta).Add(&prodfz, &l).Add(&prodfz, &gamma)
-	tmp.Add(&ualphaEta, &betaEta).Add(&tmp, &r).Add(&tmp, &gamma)
-	prodfz.Mul(&prodfz, &tmp)
-	tmp.Add(&uualphaEta, &betaEta).Add(&tmp, &o).Add(&tmp, &gamma)
-	prodfz.Mul(&prodfz, &tmp).Mul(&prodfz, &z)
+	for i := 0; i < len(witnesses); i++ {
+		tmp.Add(&IDEtaXShifted[i], &betaEta).Add(&tmp, &witnesses[i]).Add(&tmp, &gamma)
+		prodfz.Mul(&prodfz, &tmp)
+	}
 
 	var one, den fr.Element
 	one.SetOne()

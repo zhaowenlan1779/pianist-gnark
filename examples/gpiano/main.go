@@ -46,7 +46,7 @@ func main() {
 		}
 
 		opt, err := backend.NewProverConfig()
-		proof, err := gpiano_bn254.ProveDirect(pk, witnesses[0], witnesses[1], witnesses[2], witnesses[0][:numPublicInput], opt)
+		proof, err := gpiano_bn254.ProveDirect(pk, witnesses, witnesses[0][:numPublicInput], opt)
 		if err != nil {
 			log.Fatal(err)
 		}

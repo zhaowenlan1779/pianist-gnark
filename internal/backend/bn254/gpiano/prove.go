@@ -49,7 +49,7 @@ var (
 type Proof struct {
 
 	// Commitments to the solution vectors
-	LRO [3]dkzg.Digest
+	witnesses []dkzg.Digest
 
 	// Commitment to Z, W, the permutation polynomial
 	Z dkzg.Digest
@@ -112,13 +112,11 @@ func Prove(spr *cs.SparseR1CS, pk *ProvingKey, fullWitness bn254witness.Witness,
 	// query L, R, O in Lagrange basis, not blinded
 	lSmallX, rSmallX, oSmallX := evaluateLROSmallDomainX(spr, pk, solution)
 
-	return ProveCommon(&fs, pk, lSmallX, rSmallX, oSmallX, fullWitness[:spr.NbPublicVariables], opt)
+	return ProveCommon(&fs, pk, [][]fr.Element{lSmallX, rSmallX, oSmallX}, fullWitness[:spr.NbPublicVariables], opt)
 }
 
 func ProveDirect(pk *ProvingKey,
-	lSmallX []fr.Element,
-	rSmallX []fr.Element,
-	oSmallX []fr.Element,
+	witnesses [][]fr.Element,
 	publicInput []fr.Element,
 	opt backend.ProverConfig) (*Proof, error) {
 	// pick a hash function that will be used to derive the challenges
@@ -127,14 +125,12 @@ func ProveDirect(pk *ProvingKey,
 	// create a transcript manager to apply Fiat Shamir
 	fs := fiatshamir.NewTranscript(hFunc, "gamma", "etaY", "etaX", "lambda", "alpha", "beta")
 
-	return ProveCommon(&fs, pk, lSmallX, rSmallX, oSmallX, publicInput, opt)
+	return ProveCommon(&fs, pk, witnesses, publicInput, opt)
 }
 
 func ProveCommon(fs *fiatshamir.Transcript,
 	pk *ProvingKey,
-	lSmallX []fr.Element,
-	rSmallX []fr.Element,
-	oSmallX []fr.Element,
+	witnesses [][]fr.Element,
 	publicInput []fr.Element,
 	opt backend.ProverConfig) (*Proof, error) {
 	var err error
@@ -150,15 +146,13 @@ func ProveCommon(fs *fiatshamir.Transcript,
 	// save lL, lR, lO, and make a copy of them in
 	// canonical basis note that we allocate more capacity to reuse for blinded
 	// polynomials
-	lCanonicalX, rCanonicalX, oCanonicalX := computeLROCanonicalX(
-		lSmallX,
-		rSmallX,
-		oSmallX,
+	witCanonicalX := computeWitnessCanonicalX(
+		witnesses,
 		&pk.Domain[0],
 	)
 
 	// compute kzg commitments of bcL, bcR and bcO
-	if err := commitToLRO(lCanonicalX, rCanonicalX, oCanonicalX, proof, pk.Vk.DKZGSRS); err != nil {
+	if err := commitWitnesses(witCanonicalX, proof, pk.Vk.DKZGSRS); err != nil {
 		return nil, err
 	}
 
@@ -168,7 +162,11 @@ func ProveCommon(fs *fiatshamir.Transcript,
 	if err := bindPublicData(fs, "gamma", *pk.Vk, publicInput); err != nil {
 		return nil, err
 	}
-	gamma, err := deriveRandomness(fs, "gamma", false, &proof.LRO[0], &proof.LRO[1], &proof.LRO[2])
+	witnessPtrs := make([]*curve.G1Affine, len(proof.witnesses))
+	for i := 0; i < len(proof.witnesses); i++ {
+		witnessPtrs[i] = &proof.witnesses[i]
+	}
+	gamma, err := deriveRandomness(fs, "gamma", false, witnessPtrs...)
 	if err != nil {
 		return nil, err
 	}
@@ -189,9 +187,7 @@ func ProveCommon(fs *fiatshamir.Transcript,
 	// lL, lR, lO are NOT blinded
 	
 	zCanonicalX, selfProd, err := computeZCanonicalX(
-		lSmallX,
-		rSmallX,
-		oSmallX,
+		witnesses,
 		pk, etaY, etaX, gamma,
 	)
 	if err != nil {
@@ -224,7 +220,7 @@ func ProveCommon(fs *fiatshamir.Transcript,
 		return nil, err
 	}
 
-	hx1, hx2, hx3, hx4 := computeQuotientCanonicalX(pk, lCanonicalX, rCanonicalX, oCanonicalX, zCanonicalX, *pW, *cW, etaY, etaX, gamma, lambda)
+	hx1, hx2, hx3, hx4 := computeQuotientCanonicalX(pk, witCanonicalX, zCanonicalX, *pW, *cW, etaY, etaX, gamma, lambda)
 
 	// print vector of hx1, hx2, hx3, hx4
 
@@ -281,21 +277,17 @@ func ProveCommon(fs *fiatshamir.Transcript,
 
 	dkzgOpeningPolys := [][]fr.Element{
 		foldedHx,
-		lCanonicalX,
-		rCanonicalX,
-		oCanonicalX,
 		zCanonicalX,
 	}
+	dkzgOpeningPolys = append(dkzgOpeningPolys, witCanonicalX...)
 	dkzgOpeningPolys = append(dkzgOpeningPolys, pk.Q...)
 	dkzgOpeningPolys = append(dkzgOpeningPolys, pk.Sy...)
 	dkzgOpeningPolys = append(dkzgOpeningPolys, pk.Sx...)
 	dkzgDigests := []dkzg.Digest{
 		foldedHxDigest,
-		proof.LRO[0],
-		proof.LRO[1],
-		proof.LRO[2],
 		proof.Z,
 	}
+	dkzgDigests = append(dkzgDigests, proof.witnesses...)
 	dkzgDigests = append(dkzgDigests, pk.Vk.Q...)
 	dkzgDigests = append(dkzgDigests, pk.Vk.Sy...)
 	dkzgDigests = append(dkzgDigests, pk.Vk.Sx...)
@@ -458,18 +450,16 @@ func evalPolynomialsAtPoint(polys [][]fr.Element, point fr.Element) []fr.Element
 	return res
 }
 
-func commitToLRO(bcl, bcr, bco []fr.Element, proof *Proof, srs *dkzg.SRS) error {
+func commitWitnesses(witnesses [][]fr.Element, proof *Proof, srs *dkzg.SRS) error {
 	n := runtime.NumCPU() / 2
 	var err error
-	proof.LRO[0], err = dkzg.Commit(bcl, srs, n)
-	if err != nil {
-		return err
+	proof.witnesses = make([]curve.G1Affine, len(witnesses))
+	for i := 0; i < len(witnesses); i++ {
+		proof.witnesses[i], err = dkzg.Commit(witnesses[i], srs, n)
+		if err != nil {
+			return err
+		}
 	}
-	proof.LRO[1], err = dkzg.Commit(bcr, srs, n)
-	if err != nil {
-		return err
-	}
-	proof.LRO[2], err = dkzg.Commit(bco, srs, n)
 	return err
 }
 
@@ -511,22 +501,14 @@ func commitToQuotientOnY(h1, h2, h3, h4 []fr.Element, proof *Proof, srs *kzg.SRS
 	return err
 }
 
-func computeLROCanonicalX(ll, lr, lo []fr.Element, domain *fft.Domain) (cl, cr, co []fr.Element) {
-	cl = make([]fr.Element, domain.Cardinality)
-	cr = make([]fr.Element, domain.Cardinality)
-	co = make([]fr.Element, domain.Cardinality)
-
-	copy(cl, ll)
-	domain.FFTInverse(cl, fft.DIF)
-	fft.BitReverse(cl)
-
-	copy(cr, lr)
-	domain.FFTInverse(cr, fft.DIF)
-	fft.BitReverse(cr)
-
-	copy(co, lo)
-	domain.FFTInverse(co, fft.DIF)
-	fft.BitReverse(co)
+func computeWitnessCanonicalX(witnesses [][]fr.Element, domain *fft.Domain) (cwit [][]fr.Element) {
+	cwit = make([][]fr.Element, len(witnesses))
+	for i := 0; i < len(witnesses); i++ {
+		cwit[i] = make([]fr.Element, domain.Cardinality)
+		copy(cwit[i], witnesses[i])
+		domain.FFTInverse(cwit[i], fft.DIF)
+		fft.BitReverse(cwit[i])
+	}
 	return
 }
 
@@ -627,7 +609,7 @@ func evaluateLROSmallDomainX(spr *cs.SparseR1CS, pk *ProvingKey, solution []fr.E
 //							         (l(g**k)+eta*s1(g**k)+gamma)*(r(g**k)+eta*s2(g**k)+gamma)*(o(g**k)+eta*s3(g**k)+gamma)
 //
 //	* l, r, o are the solution in Lagrange basis, evaluated on the small domain
-func computeZCanonicalX(l, r, o []fr.Element, pk *ProvingKey, etaY, etaX, gamma fr.Element) ([]fr.Element, fr.Element, error) {
+func computeZCanonicalX(witnesses [][]fr.Element, pk *ProvingKey, etaY, etaX, gamma fr.Element) ([]fr.Element, fr.Element, error) {
 	// note that z has more capacity has its memory is reused for z later on
 	z := make([]fr.Element, pk.Domain[0].Cardinality + 1)
 	gInv := make([]fr.Element, pk.Domain[0].Cardinality + 1)
@@ -636,7 +618,7 @@ func computeZCanonicalX(l, r, o []fr.Element, pk *ProvingKey, etaY, etaX, gamma 
 	gInv[0].SetOne()
 
 	IDys := getIDySmallDomain(globalDomain[0])
-	IDxs := getIDxSmallDomain(&pk.Domain[0])
+	IDxs := getIDxSmallDomain(&pk.Domain[0], len(witnesses))
 
 	var IDEtaY fr.Element
 	IDEtaY.Mul(&IDys[mpi.SelfRank], &etaY)
@@ -649,25 +631,17 @@ func computeZCanonicalX(l, r, o []fr.Element, pk *ProvingKey, etaY, etaX, gamma 
 
 	n := int(pk.Domain[0].Cardinality)
 	utils.Parallelize(n, func(start, end int) {
-
-		var f [3]fr.Element
-		var g [3]fr.Element
-		var t [3]fr.Element
+		var f, g, t []fr.Element = make([]fr.Element, len(witnesses)), make([]fr.Element, len(witnesses)), make([]fr.Element, len(witnesses))
 		for i := start; i < end; i++ {
-			f[0].Mul(&IDxs[i], &etaX).Add(&f[0], &IDEtaY).Add(&f[0], &l[i]).Add(&f[0], &gamma)
-			f[1].Mul(&IDxs[i+n], &etaX).Add(&f[1], &IDEtaY).Add(&f[1], &r[i]).Add(&f[1], &gamma)
-			f[2].Mul(&IDxs[i+2*n], &etaX).Add(&f[2], &IDEtaY).Add(&f[2], &o[i]).Add(&f[2], &gamma)
-
-			t[0].Mul(&IDys[pk.PermutationY[i]], &etaY)
-			t[1].Mul(&IDys[pk.PermutationY[i+n]], &etaY)
-			t[2].Mul(&IDys[pk.PermutationY[i+2*n]], &etaY)
-			g[0].Mul(&IDxs[pk.PermutationX[i]], &etaX).Add(&g[0], &t[0]).Add(&g[0], &l[i]).Add(&g[0], &gamma)
-			g[1].Mul(&IDxs[pk.PermutationX[i+n]], &etaX).Add(&g[1], &t[1]).Add(&g[1], &r[i]).Add(&g[1], &gamma)
-			g[2].Mul(&IDxs[pk.PermutationX[i+2*n]], &etaX).Add(&g[2], &t[2]).Add(&g[2], &o[i]).Add(&g[2], &gamma)
-
-			f[0].Mul(&f[0], &f[1]).Mul(&f[0], &f[2])
-			g[0].Mul(&g[0], &g[1]).Mul(&g[0], &g[2])
-			
+			for j := 0; j < len(witnesses); j++ {
+				f[j].Mul(&IDxs[i+j*n], &etaX).Add(&f[j], &IDEtaY).Add(&f[j], &witnesses[j][i]).Add(&f[j], &gamma)
+				t[j].Mul(&IDys[pk.PermutationY[i+j*n]], &etaY)
+				g[j].Mul(&IDxs[pk.PermutationX[i+j*n]], &etaX).Add(&g[j], &t[j]).Add(&g[j], &witnesses[j][i]).Add(&g[j], &gamma)
+			}
+			for j := 1; j < len(witnesses); j++ {
+				f[0].Mul(&f[0], &f[j])
+				g[0].Mul(&g[0], &g[j])
+			}
 			gInv[i+1] = g[0]
 			z[i+1] = f[0]
 		}
@@ -770,7 +744,7 @@ func evaluateXnMinusOneBig(domainBig, domainSmall *fft.Domain) []fr.Element {
 // )
 // + (lambda**2) * L0(X)*(z(X)-1)
 // = hx(X)Zn(X)
-func computeQuotientCanonicalX(pk *ProvingKey, lCanonicalX, rCanonicalX, oCanonicalX, zCanonicalX []fr.Element, pW, cW, etaY, etaX, gamma, lambda fr.Element) ([]fr.Element, []fr.Element, []fr.Element, []fr.Element) {
+func computeQuotientCanonicalX(pk *ProvingKey, witCanonicalX [][]fr.Element, zCanonicalX []fr.Element, pW, cW, etaY, etaX, gamma, lambda fr.Element) ([]fr.Element, []fr.Element, []fr.Element, []fr.Element) {
 	ratio := pk.Domain[1].Cardinality / pk.Domain[0].Cardinality
 
 	// Compute the power of domain[1].Generator with bit-reversed order.
@@ -782,9 +756,12 @@ func computeQuotientCanonicalX(pk *ProvingKey, lCanonicalX, rCanonicalX, oCanoni
 	fft.BitReverse(factorsBR)
 
 	// Variables needed in permutation constraint.
-	var cosetShiftX, cosetShiftSquareX fr.Element
-	cosetShiftX.Set(&pk.Vk.CosetShift)
-	cosetShiftSquareX.Mul(&cosetShiftX, &pk.Vk.CosetShift)
+	cosetShifts := make([]fr.Element, len(witCanonicalX) - 1)
+	cosetShifts[0].Set(&pk.Vk.CosetShift)
+	for i := 1; i < len(cosetShifts); i++ {
+		cosetShifts[i].Mul(&cosetShifts[i - 1], &pk.Vk.CosetShift)
+	}
+
 	var IDEtaY fr.Element
 	IDEtaY.Exp(globalDomain[0].Generator, big.NewInt(int64(mpi.SelfRank))).Mul(&IDEtaY, &etaY)
 
@@ -824,9 +801,10 @@ func computeQuotientCanonicalX(pk *ProvingKey, lCanonicalX, rCanonicalX, oCanoni
 			q[i] = pk.Domain[0].FFTPart(pk.Q[i], fft.DIF, factorsBR[_j], true)
 		}
 
-		l := pk.Domain[0].FFTPart(lCanonicalX, fft.DIF, factorsBR[_j], true)
-		r := pk.Domain[0].FFTPart(rCanonicalX, fft.DIF, factorsBR[_j], true)
-		o := pk.Domain[0].FFTPart(oCanonicalX, fft.DIF, factorsBR[_j], true)
+		witnesses := make([][]fr.Element, len(witCanonicalX))
+		for i := 0; i < len(witnesses); i++ {
+			witnesses[i] = pk.Domain[0].FFTPart(witCanonicalX[i], fft.DIF, factorsBR[_j], true)
+		}
 
 		hStart := uint64(_j) * n
 		utils.Parallelize(int(n), func(start, end int) {
@@ -849,18 +827,27 @@ func computeQuotientCanonicalX(pk *ProvingKey, lCanonicalX, rCanonicalX, oCanoni
 				// Compute permutation constraints 
 				// (1 - L_{n - 1}(X))z(mu*X)*g1(X)*g2(X)*g3(X) - z(X)*f1(X)*f2(X)*f3(X)
 				// + L_{n-1}(X)*(cW*g1(X)*g2(X)*g3(X) - pW*z(X)*f1(X)*f2(X)*f3(X))
-				f[0].Add(&IDEtaX, &IDEtaY).Add(&f[0], &l[_i]).Add(&f[0], &gamma)
-				f[1].Mul(&IDEtaX, &cosetShiftX).Add(&f[1], &IDEtaY).Add(&f[1], &r[_i]).Add(&f[1], &gamma)
-				f[2].Mul(&IDEtaX, &cosetShiftSquareX).Add(&f[2], &IDEtaY).Add(&f[2], &o[_i]).Add(&f[2], &gamma)
-				f[0].Mul(&f[0], &f[1]).Mul(&f[0], &f[2])
+				for j := 0; j < len(witnesses); j++ {
+					if j == 0 {
+						f[j].Set(&IDEtaX)
+					} else {
+						f[j].Mul(&IDEtaX, &cosetShifts[j - 1])
+					}
+					f[j].Add(&f[j], &IDEtaY).Add(&f[j], &witnesses[j][_i]).Add(&f[j], &gamma)
+				}
+				for j := 1; j < len(witnesses); j++ {
+					f[0].Mul(&f[0], &f[j])
+				}
 
 				for j := 0; j < len(sy); j++ {
 					t[j].Mul(&sy[j][_i], &etaY)
 				}
-				g[0].Mul(&sx[0][_i], &etaX).Add(&g[0], &t[0]).Add(&g[0], &l[_i]).Add(&g[0], &gamma)
-				g[1].Mul(&sx[1][_i], &etaX).Add(&g[1], &t[1]).Add(&g[1], &r[_i]).Add(&g[1], &gamma)
-				g[2].Mul(&sx[2][_i], &etaX).Add(&g[2], &t[2]).Add(&g[2], &o[_i]).Add(&g[2], &gamma)
-				g[0].Mul(&g[0], &g[1]).Mul(&g[0], &g[2])
+				for j := 0; j < len(witnesses); j++ {
+					g[j].Mul(&sx[j][_i], &etaX).Add(&g[j], &t[j]).Add(&g[j], &witnesses[j][_i]).Add(&g[j], &gamma)
+				}
+				for j := 1; j < len(witnesses); j++ {
+					g[0].Mul(&g[0], &g[j])
+				}
 				
 				oneMinusLL.Sub(&one, &ll[_i])
 				t0.Mul(&f[0], &z[_i])
@@ -875,14 +862,14 @@ func computeQuotientCanonicalX(pk *ProvingKey, lCanonicalX, rCanonicalX, oCanoni
 				IDEtaX.Mul(&IDEtaX, &pk.Domain[0].Generator)
 
 				// Compute gate constraint
-				t1.Mul(&q[2][_i], &r[_i])
+				t1.Mul(&q[2][_i], &witnesses[1][_i])
 				t1.Add(&t1, &q[0][_i])
-				t1.Mul(&t1, &l[_i])
+				t1.Mul(&t1, &witnesses[0][_i])
 	
-				t0.Mul(&q[1][_i], &r[_i])
+				t0.Mul(&q[1][_i], &witnesses[1][_i])
 				t0.Add(&t0, &t1)
 	
-				t1.Mul(&q[3][_i], &o[_i])
+				t1.Mul(&q[3][_i], &witnesses[2][_i])
 				t0.Add(&t0, &t1).Add(&t0, &q[4][_i])
 				h[hStart + _i].Mul(&h[hStart + _i], &lambda).Add(&h[hStart + _i], &t0)
 			}
@@ -940,10 +927,12 @@ func computeQuotientCanonicalY(pk *ProvingKey, polys [][]fr.Element, etaY, etaX,
 
 	// Variables needed in permutation constraint.
 	n := globalDomain[0].Cardinality
-	var IDEtaX, IDCosetShiftEtaX, IDCosetShiftSquareEtaX fr.Element
-	IDEtaX.Mul(&alpha, &etaX)
-	IDCosetShiftEtaX.Mul(&IDEtaX, &pk.Vk.CosetShift)
-	IDCosetShiftSquareEtaX.Mul(&IDCosetShiftEtaX, &pk.Vk.CosetShift)
+
+	IDEtaXShifted := make([]fr.Element, len(pk.Sy))
+	IDEtaXShifted[0].Mul(&alpha, &etaX)
+	for i := 1; i < len(IDEtaXShifted); i++ {
+		IDEtaXShifted[i].Mul(&IDEtaXShifted[i - 1], &pk.Vk.CosetShift)
+	}
 
 	var one fr.Element
 	one.SetOne()
@@ -972,23 +961,24 @@ func computeQuotientCanonicalY(pk *ProvingKey, polys [][]fr.Element, etaY, etaX,
 	for _j := 0; _j < int(ratio); _j++ {
 		// Compute FFT part for each polynomial.
 		foldedHx := globalDomain[0].FFTPart(polys[0], fft.DIF, factorsBR[_j], true)
-		l := globalDomain[0].FFTPart(polys[1], fft.DIF, factorsBR[_j], true)
-		r := globalDomain[0].FFTPart(polys[2], fft.DIF, factorsBR[_j], true)
-		o := globalDomain[0].FFTPart(polys[3], fft.DIF, factorsBR[_j], true)
-		z := globalDomain[0].FFTPart(polys[4], fft.DIF, factorsBR[_j], true)
+		z := globalDomain[0].FFTPart(polys[1], fft.DIF, factorsBR[_j], true)
+		witnesses := make([][]fr.Element, len(pk.Sy))
+		for i := 0; i < len(pk.Sy); i++ {
+			witnesses[i] = globalDomain[0].FFTPart(polys[2 + i], fft.DIF, factorsBR[_j], true)
+		}
 		q := make([][]fr.Element, len(pk.Q))
 		for i := 0; i < len(q); i++ {
-			q[i] = globalDomain[0].FFTPart(polys[5 + i], fft.DIF, factorsBR[_j], true)
+			q[i] = globalDomain[0].FFTPart(polys[2 + len(witnesses) + i], fft.DIF, factorsBR[_j], true)
 		}
 		sy := make([][]fr.Element, len(pk.Sy))
 		for i := 0; i < len(sy); i++ {
-			sy[i] = globalDomain[0].FFTPart(polys[5 + len(q) + i], fft.DIF, factorsBR[_j], true)
+			sy[i] = globalDomain[0].FFTPart(polys[2 + len(witnesses) + len(q) + i], fft.DIF, factorsBR[_j], true)
 		}
 		sx := make([][]fr.Element, len(pk.Sx))
 		for i := 0; i < len(sx); i++ {
-			sx[i] = globalDomain[0].FFTPart(polys[5 + len(q) + len(sy) + i], fft.DIF, factorsBR[_j], true)
+			sx[i] = globalDomain[0].FFTPart(polys[2 + len(witnesses) + len(q) + len(sy) + i], fft.DIF, factorsBR[_j], true)
 		}
-		offset := 5 + len(q) + len(sy) + len(sx)
+		offset := 2 + len(witnesses) + len(q) + len(sy) + len(sx)
 		zs := globalDomain[0].FFTPart(polys[offset], fft.DIF, factorsBR[_j], true)
 		w := globalDomain[0].FFTPart(polys[offset + 1], fft.DIF, factorsBR[_j], true)
 		ly0 := globalDomain[0].FFTPart(LagY0, fft.DIF, factorsBR[_j], true)
@@ -1014,18 +1004,22 @@ func computeQuotientCanonicalY(pk *ProvingKey, polys [][]fr.Element, etaY, etaX,
 				// Compute the permutation constraint
 				// (1 - Lx_{n - 1}(X))(Z(Y, omegaX*alpha)()()() - Z(Y, alpha)()()())
 				// + Lx_{n - 1}(X)(W(omegaY*Y)()()() - W(Y)*Z(Y, alpha)()()())
-				f[0].Add(&IDEtaY, &IDEtaX).Add(&f[0], &l[_i]).Add(&f[0], &gamma)
-				f[1].Add(&IDEtaY, &IDCosetShiftEtaX).Add(&f[1], &r[_i]).Add(&f[1], &gamma)
-				f[2].Add(&IDEtaY, &IDCosetShiftSquareEtaX).Add(&f[2], &o[_i]).Add(&f[2], &gamma)
-				f[0].Mul(&f[0], &f[1]).Mul(&f[0], &f[2])
+				for j := 0; j < len(f); j++ {
+					f[j].Add(&IDEtaY, &IDEtaXShifted[j]).Add(&f[j], &witnesses[j][_i]).Add(&f[j], &gamma)
+				}
+				for j := 1; j < len(f); j++ {
+					f[0].Mul(&f[0], &f[j])
+				}
 
 				for j := 0; j < len(sy); j++ {
 					t[j].Mul(&sy[j][_i], &etaY)
 				}
-				g[0].Mul(&sx[0][_i], &etaX).Add(&g[0], &t[0]).Add(&g[0], &l[_i]).Add(&g[0], &gamma)
-				g[1].Mul(&sx[1][_i], &etaX).Add(&g[1], &t[1]).Add(&g[1], &r[_i]).Add(&g[1], &gamma)
-				g[2].Mul(&sx[2][_i], &etaX).Add(&g[2], &t[2]).Add(&g[2], &o[_i]).Add(&g[2], &gamma)
-				g[0].Mul(&g[0], &g[1]).Mul(&g[0], &g[2])
+				for j := 0; j < len(g); j++ {
+					g[j].Mul(&sx[j][_i], &etaX).Add(&g[j], &t[j]).Add(&g[j], &witnesses[j][_i]).Add(&g[j], &gamma)
+				}
+				for j := 1; j < len(f); j++ {
+					g[0].Mul(&g[0], &g[j])
+				}
 
 				t0.Mul(&f[0], &z[_i])
 				t1.Mul(&g[0], &zs[_i])
@@ -1039,14 +1033,14 @@ func computeQuotientCanonicalY(pk *ProvingKey, polys [][]fr.Element, etaY, etaX,
 				IDEtaY.Mul(&IDEtaY, &globalDomain[0].Generator)
 
 				// Compute the gate constraint.
-				t1.Mul(&q[2][_i], &r[_i])
+				t1.Mul(&q[2][_i], &witnesses[1][_i])
 				t1.Add(&t1, &q[0][_i])
-				t1.Mul(&t1, &l[_i])
+				t1.Mul(&t1, &witnesses[0][_i])
 	
-				t0.Mul(&q[1][_i], &r[_i])
+				t0.Mul(&q[1][_i], &witnesses[1][_i])
 				t0.Add(&t0, &t1)
 	
-				t1.Mul(&q[3][_i], &o[_i])
+				t1.Mul(&q[3][_i], &witnesses[2][_i])
 				t0.Add(&t0, &t1)
 				t0.Add(&t0, &q[4][_i])
 				h[hStart + _i].Mul(&h[hStart + _i], &lambda).Add(&h[hStart + _i], &t0)
@@ -1091,25 +1085,34 @@ func checkConstraintX(pk *ProvingKey, evalsXOnAlpha [][]fr.Element, zShiftedAlph
 	den.Sub(&alpha, &pk.Domain[0].GeneratorInv).Inverse(&den)
 	ll.Mul(&ll, &den).Mul(&ll, &pk.Domain[0].CardinalityInv).Mul(&ll, &pk.Domain[0].GeneratorInv)
 	oneMinusLL.Sub(&one, &ll)
+
+	IDEtaXShifted := make([]fr.Element, len(pk.Sy))
+	IDEtaXShifted[0].Mul(&alpha, &etaX)
+	for i := 1; i < len(IDEtaXShifted); i++ {
+		IDEtaXShifted[i].Mul(&IDEtaXShifted[i - 1], &pk.Vk.CosetShift)
+	}
+
 	for k := 0; k < int(mpi.WorldSize); k++ {
 		// unpack vector evalsXOnAlpha on hx, l, r, o, ql, qr, qm, qo, qk, s1, s2, s3, z
 		hx := evalsXOnAlpha[0][k]
-		l := evalsXOnAlpha[1][k]
-		r := evalsXOnAlpha[2][k]
-		o := evalsXOnAlpha[3][k]
+		z := evalsXOnAlpha[1][k]
+
+		witnesses := make([]fr.Element, len(pk.Sy))
+		for i := 0; i < len(witnesses); i++ {
+			witnesses[i] = evalsXOnAlpha[2 + i][k]
+		}
 		
-		z := evalsXOnAlpha[4][k]
 		q := make([]fr.Element, len(pk.Q))
 		for i := 0; i < len(q); i++ {
-			q[i] = evalsXOnAlpha[5 + i][k]
+			q[i] = evalsXOnAlpha[2 + len(witnesses) + i][k]
 		}
 		sy := make([]fr.Element, len(pk.Sy))
 		for i := 0; i < len(sy); i++ {
-			sy[i] = evalsXOnAlpha[5 + len(q) + i][k]
+			sy[i] = evalsXOnAlpha[2 + len(witnesses)  + len(q) + i][k]
 		}
 		sx := make([]fr.Element, len(pk.Sx))
 		for i := 0; i < len(sy); i++ {
-			sx[i] = evalsXOnAlpha[5 + len(q) + len(sy) + i][k]
+			sx[i] = evalsXOnAlpha[2 + len(witnesses)  + len(q) + len(sy) + i][k]
 		}
 		zs := zShiftedAlpha[k]
 		pw := wSmallY[k]
@@ -1119,34 +1122,34 @@ func checkConstraintX(pk *ProvingKey, evalsXOnAlpha [][]fr.Element, zShiftedAlph
 
 		// first part: individual constraints
 		var firstPart fr.Element
-		q[0].Mul(&q[0], &l)
-		q[1].Mul(&q[1], &r)
-		q[2].Mul(&q[2], &l).Mul(&q[2], &r)
-		q[3].Mul(&q[3], &o)
+		q[0].Mul(&q[0], &witnesses[0])
+		q[1].Mul(&q[1], &witnesses[1])
+		q[2].Mul(&q[2], &witnesses[0]).Mul(&q[2], &witnesses[1])
+		q[3].Mul(&q[3], &witnesses[2])
 		firstPart.Add(&q[0], &q[1]).Add(&firstPart, &q[2]).Add(&firstPart, &q[3]).Add(&firstPart, &q[4])
 
 		// second part:
 		// (1 - L_{n - 1})(z(, omegaX * alpha)()()() - z(, alpha)()()())
 		// + L_{n - 1}(cw * ()()() - pw * z(, alpha)()()())
 		var prodfz, prodg fr.Element
-		sy[0].Mul(&sy[0], &etaY)
-		sy[1].Mul(&sy[1], &etaY)
-		sy[2].Mul(&sy[2], &etaY)
-		sx[0].Mul(&sx[0], &etaX).Add(&sx[0], &sy[0]).Add(&sx[0], &l).Add(&sx[0], &gamma)
-		sx[1].Mul(&sx[1], &etaX).Add(&sx[1], &sy[1]).Add(&sx[1], &r).Add(&sx[1], &gamma)
-		sx[2].Mul(&sx[2], &etaX).Add(&sx[2], &sy[2]).Add(&sx[2], &o).Add(&sx[2], &gamma)
-		prodg.Mul(&sx[0], &sx[1]).Mul(&prodg, &sx[2])
+		for i := 0; i < len(sy); i++ {
+			sy[i].Mul(&sy[i], &etaY)
+		}
+		for i := 0; i < len(sx); i++ {
+			sx[i].Mul(&sx[i], &etaX).Add(&sx[i], &sy[i]).Add(&sx[i], &witnesses[i]).Add(&sx[i], &gamma)
+		}
+		prodg.Set(&sx[0])
+		for i := 1; i < len(sx); i++ {
+			prodg.Mul(&prodg, &sx[i])
+		}
 
-		var ualpha, uualpha fr.Element
-		ualpha.Mul(&alpha, &pk.Vk.CosetShift)
-		uualpha.Mul(&ualpha, &pk.Vk.CosetShift)
+		prodfz.Set(&z)
 
 		var tmp fr.Element
-		prodfz.Mul(&etaX, &alpha).Add(&prodfz, &IDEtaY).Add(&prodfz, &l).Add(&prodfz, &gamma)
-		tmp.Mul(&etaX, &ualpha).Add(&tmp, &IDEtaY).Add(&tmp, &r).Add(&tmp, &gamma)
-		prodfz.Mul(&prodfz, &tmp)
-		tmp.Mul(&etaX, &uualpha).Add(&tmp, &IDEtaY).Add(&tmp, &o).Add(&tmp, &gamma)
-		prodfz.Mul(&prodfz, &tmp).Mul(&prodfz, &z)
+		for i := 0; i < len(witnesses); i++ {
+			tmp.Add(&IDEtaXShifted[i], &IDEtaY).Add(&tmp, &witnesses[i]).Add(&tmp, &gamma)
+			prodfz.Mul(&prodfz, &tmp)
+		}
 
 		var secondPart, case1, case2 fr.Element
 		case1.Mul(&prodg, &zs).Sub(&case1, &prodfz).Mul(&case1, &oneMinusLL)

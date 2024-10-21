@@ -583,7 +583,7 @@ func ccomputePermutationPolynomials(pk *ProvingKey) {
 
 	// Lagrange form of ID
 	IDys := getIDySmallDomain(globalDomain[0])
-	IDxs := getIDxSmallDomain(&pk.Domain[0])
+	IDxs := getIDxSmallDomain(&pk.Domain[0], 3)
 
 	// Lagrange form of S1, S2, S3
 	pk.Sy = make([][]fr.Element, 3)
@@ -618,18 +618,19 @@ func ccomputePermutationPolynomials(pk *ProvingKey) {
 }
 
 // getIDxSmallDomain returns the Lagrange form of ID on the small domain
-func getIDxSmallDomain(domain *fft.Domain) []fr.Element {
+func getIDxSmallDomain(domain *fft.Domain, numWitnesses int) []fr.Element {
 
-	res := make([]fr.Element, 3*domain.Cardinality)
+	res := make([]fr.Element, numWitnesses*int(domain.Cardinality))
 
 	res[0].SetOne()
-	res[domain.Cardinality].Set(&domain.FrMultiplicativeGen)
-	res[2*domain.Cardinality].Square(&domain.FrMultiplicativeGen)
+	for i := 1; i < numWitnesses; i++ {
+		res[i * int(domain.Cardinality)].Mul(&res[(i - 1) * int(domain.Cardinality)], &domain.FrMultiplicativeGen)
+	}
 
 	for i := uint64(1); i < domain.Cardinality; i++ {
-		res[i].Mul(&res[i-1], &domain.Generator)
-		res[domain.Cardinality+i].Mul(&res[domain.Cardinality+i-1], &domain.Generator)
-		res[2*domain.Cardinality+i].Mul(&res[2*domain.Cardinality+i-1], &domain.Generator)
+		for j := uint64(0); j < uint64(numWitnesses); j++ {
+			res[j * domain.Cardinality + i].Mul(&res[j * domain.Cardinality + i-1], &domain.Generator)
+		}
 	}
 
 	return res
