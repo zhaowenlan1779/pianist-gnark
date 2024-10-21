@@ -284,37 +284,21 @@ func ProveCommon(fs *fiatshamir.Transcript,
 		lCanonicalX,
 		rCanonicalX,
 		oCanonicalX,
-		pk.Ql,
-		pk.Qr,
-		pk.Qm,
-		pk.Qo,
-		pk.Qk,
-		pk.Sy1Canonical,
-		pk.Sy2Canonical,
-		pk.Sy3Canonical,
-		pk.Sx1Canonical,
-		pk.Sx2Canonical,
-		pk.Sx3Canonical,
 		zCanonicalX,
 	}
+	dkzgOpeningPolys = append(dkzgOpeningPolys, pk.Q...)
+	dkzgOpeningPolys = append(dkzgOpeningPolys, pk.Sy...)
+	dkzgOpeningPolys = append(dkzgOpeningPolys, pk.Sx...)
 	dkzgDigests := []dkzg.Digest{
 		foldedHxDigest,
 		proof.LRO[0],
 		proof.LRO[1],
 		proof.LRO[2],
-		pk.Vk.Ql,
-		pk.Vk.Qr,
-		pk.Vk.Qm,
-		pk.Vk.Qo,
-		pk.Vk.Qk,
-		pk.Vk.Sy[0],
-		pk.Vk.Sy[1],
-		pk.Vk.Sy[2],
-		pk.Vk.Sx[0],
-		pk.Vk.Sx[1],
-		pk.Vk.Sx[2],
 		proof.Z,
 	}
+	dkzgDigests = append(dkzgDigests, pk.Vk.Q...)
+	dkzgDigests = append(dkzgDigests, pk.Vk.Sy...)
+	dkzgDigests = append(dkzgDigests, pk.Vk.Sx...)
 
 	// Batch open the first list of polynomials
 	var evalsXOnAlpha [][]fr.Element
@@ -825,19 +809,20 @@ func computeQuotientCanonicalX(pk *ProvingKey, lCanonicalX, rCanonicalX, oCanoni
 		l0 := pk.Domain[0].FFTPart(Lag0, fft.DIF, factorsBR[_j], true)
 		ll := pk.Domain[0].FFTPart(LagLst, fft.DIF, factorsBR[_j], true)
 
-		sy1 := pk.Domain[0].FFTPart(pk.Sy1Canonical, fft.DIF, factorsBR[_j], true)
-		sy2 := pk.Domain[0].FFTPart(pk.Sy2Canonical, fft.DIF, factorsBR[_j], true)
-		sy3 := pk.Domain[0].FFTPart(pk.Sy3Canonical, fft.DIF, factorsBR[_j], true)
-		sx1 := pk.Domain[0].FFTPart(pk.Sx1Canonical, fft.DIF, factorsBR[_j], true)
-		sx2 := pk.Domain[0].FFTPart(pk.Sx2Canonical, fft.DIF, factorsBR[_j], true)
-		sx3 := pk.Domain[0].FFTPart(pk.Sx3Canonical, fft.DIF, factorsBR[_j], true)
+		sy := make([][]fr.Element, 3)
+		for i := 0; i < len(pk.Sy); i++ {
+			sy[i] = pk.Domain[0].FFTPart(pk.Sy[i], fft.DIF, factorsBR[_j], true)
+		}
+		sx := make([][]fr.Element, 3)
+		for i := 0; i < len(pk.Sy); i++ {
+			sx[i] = pk.Domain[0].FFTPart(pk.Sx[i], fft.DIF, factorsBR[_j], true)
+		}
 		z := pk.Domain[0].FFTPart(zCanonicalX, fft.DIF, factorsBR[_j], true)
 
-		ql := pk.Domain[0].FFTPart(pk.Ql, fft.DIF, factorsBR[_j], true)
-		qr := pk.Domain[0].FFTPart(pk.Qr, fft.DIF, factorsBR[_j], true)
-		qm := pk.Domain[0].FFTPart(pk.Qm, fft.DIF, factorsBR[_j], true)
-		qo := pk.Domain[0].FFTPart(pk.Qo, fft.DIF, factorsBR[_j], true)
-		qk := pk.Domain[0].FFTPart(pk.Qk, fft.DIF, factorsBR[_j], true)
+		q := make([][]fr.Element, 5)
+		for i := 0; i < len(pk.Q); i++ {
+			q[i] = pk.Domain[0].FFTPart(pk.Q[i], fft.DIF, factorsBR[_j], true)
+		}
 
 		l := pk.Domain[0].FFTPart(lCanonicalX, fft.DIF, factorsBR[_j], true)
 		r := pk.Domain[0].FFTPart(rCanonicalX, fft.DIF, factorsBR[_j], true)
@@ -845,7 +830,7 @@ func computeQuotientCanonicalX(pk *ProvingKey, lCanonicalX, rCanonicalX, oCanoni
 
 		hStart := uint64(_j) * n
 		utils.Parallelize(int(n), func(start, end int) {
-			var f, g, t [3]fr.Element
+			var f, g, t []fr.Element = make([]fr.Element, len(sy)), make([]fr.Element, len(sy)), make([]fr.Element, len(sy))
 			var oneMinusLL fr.Element
 			var t0, t1 fr.Element
 			var IDEtaX fr.Element
@@ -869,12 +854,12 @@ func computeQuotientCanonicalX(pk *ProvingKey, lCanonicalX, rCanonicalX, oCanoni
 				f[2].Mul(&IDEtaX, &cosetShiftSquareX).Add(&f[2], &IDEtaY).Add(&f[2], &o[_i]).Add(&f[2], &gamma)
 				f[0].Mul(&f[0], &f[1]).Mul(&f[0], &f[2])
 
-				t[0].Mul(&sy1[_i], &etaY)
-				t[1].Mul(&sy2[_i], &etaY)
-				t[2].Mul(&sy3[_i], &etaY)
-				g[0].Mul(&sx1[_i], &etaX).Add(&g[0], &t[0]).Add(&g[0], &l[_i]).Add(&g[0], &gamma)
-				g[1].Mul(&sx2[_i], &etaX).Add(&g[1], &t[1]).Add(&g[1], &r[_i]).Add(&g[1], &gamma)
-				g[2].Mul(&sx3[_i], &etaX).Add(&g[2], &t[2]).Add(&g[2], &o[_i]).Add(&g[2], &gamma)
+				for j := 0; j < len(sy); j++ {
+					t[j].Mul(&sy[j][_i], &etaY)
+				}
+				g[0].Mul(&sx[0][_i], &etaX).Add(&g[0], &t[0]).Add(&g[0], &l[_i]).Add(&g[0], &gamma)
+				g[1].Mul(&sx[1][_i], &etaX).Add(&g[1], &t[1]).Add(&g[1], &r[_i]).Add(&g[1], &gamma)
+				g[2].Mul(&sx[2][_i], &etaX).Add(&g[2], &t[2]).Add(&g[2], &o[_i]).Add(&g[2], &gamma)
 				g[0].Mul(&g[0], &g[1]).Mul(&g[0], &g[2])
 				
 				oneMinusLL.Sub(&one, &ll[_i])
@@ -890,15 +875,15 @@ func computeQuotientCanonicalX(pk *ProvingKey, lCanonicalX, rCanonicalX, oCanoni
 				IDEtaX.Mul(&IDEtaX, &pk.Domain[0].Generator)
 
 				// Compute gate constraint
-				t1.Mul(&qm[_i], &r[_i])
-				t1.Add(&t1, &ql[_i])
+				t1.Mul(&q[2][_i], &r[_i])
+				t1.Add(&t1, &q[0][_i])
 				t1.Mul(&t1, &l[_i])
 	
-				t0.Mul(&qr[_i], &r[_i])
+				t0.Mul(&q[1][_i], &r[_i])
 				t0.Add(&t0, &t1)
 	
-				t1.Mul(&qo[_i], &o[_i])
-				t0.Add(&t0, &t1).Add(&t0, &qk[_i])
+				t1.Mul(&q[3][_i], &o[_i])
+				t0.Add(&t0, &t1).Add(&t0, &q[4][_i])
 				h[hStart + _i].Mul(&h[hStart + _i], &lambda).Add(&h[hStart + _i], &t0)
 			}
 		})
@@ -990,25 +975,27 @@ func computeQuotientCanonicalY(pk *ProvingKey, polys [][]fr.Element, etaY, etaX,
 		l := globalDomain[0].FFTPart(polys[1], fft.DIF, factorsBR[_j], true)
 		r := globalDomain[0].FFTPart(polys[2], fft.DIF, factorsBR[_j], true)
 		o := globalDomain[0].FFTPart(polys[3], fft.DIF, factorsBR[_j], true)
-		ql := globalDomain[0].FFTPart(polys[4], fft.DIF, factorsBR[_j], true)
-		qr := globalDomain[0].FFTPart(polys[5], fft.DIF, factorsBR[_j], true)
-		qm := globalDomain[0].FFTPart(polys[6], fft.DIF, factorsBR[_j], true)
-		qo := globalDomain[0].FFTPart(polys[7], fft.DIF, factorsBR[_j], true)
-		qk := globalDomain[0].FFTPart(polys[8], fft.DIF, factorsBR[_j], true)
-		sy1 := globalDomain[0].FFTPart(polys[9], fft.DIF, factorsBR[_j], true)
-		sy2 := globalDomain[0].FFTPart(polys[10], fft.DIF, factorsBR[_j], true)
-		sy3 := globalDomain[0].FFTPart(polys[11], fft.DIF, factorsBR[_j], true)
-		sx1 := globalDomain[0].FFTPart(polys[12], fft.DIF, factorsBR[_j], true)
-		sx2 := globalDomain[0].FFTPart(polys[13], fft.DIF, factorsBR[_j], true)
-		sx3 := globalDomain[0].FFTPart(polys[14], fft.DIF, factorsBR[_j], true)
-		z := globalDomain[0].FFTPart(polys[15], fft.DIF, factorsBR[_j], true)
-		zs := globalDomain[0].FFTPart(polys[16], fft.DIF, factorsBR[_j], true)
-		w := globalDomain[0].FFTPart(polys[17], fft.DIF, factorsBR[_j], true)
+		z := globalDomain[0].FFTPart(polys[4], fft.DIF, factorsBR[_j], true)
+		q := make([][]fr.Element, len(pk.Q))
+		for i := 0; i < len(q); i++ {
+			q[i] = globalDomain[0].FFTPart(polys[5 + i], fft.DIF, factorsBR[_j], true)
+		}
+		sy := make([][]fr.Element, len(pk.Sy))
+		for i := 0; i < len(sy); i++ {
+			sy[i] = globalDomain[0].FFTPart(polys[5 + len(q) + i], fft.DIF, factorsBR[_j], true)
+		}
+		sx := make([][]fr.Element, len(pk.Sx))
+		for i := 0; i < len(sx); i++ {
+			sx[i] = globalDomain[0].FFTPart(polys[5 + len(q) + len(sy) + i], fft.DIF, factorsBR[_j], true)
+		}
+		offset := 5 + len(q) + len(sy) + len(sx)
+		zs := globalDomain[0].FFTPart(polys[offset], fft.DIF, factorsBR[_j], true)
+		w := globalDomain[0].FFTPart(polys[offset + 1], fft.DIF, factorsBR[_j], true)
 		ly0 := globalDomain[0].FFTPart(LagY0, fft.DIF, factorsBR[_j], true)
 
 		hStart := uint64(_j) * n
 		utils.Parallelize(int(n), func(start, end int) {
-			var f, g, t [3]fr.Element
+			var f, g, t []fr.Element = make([]fr.Element, len(sy)), make([]fr.Element, len(sy)), make([]fr.Element, len(sy))
 			var t0, t1 fr.Element
 			var IDEtaY fr.Element
 			IDEtaY.Exp(globalDomain[0].Generator, big.NewInt(int64(start))).
@@ -1032,12 +1019,12 @@ func computeQuotientCanonicalY(pk *ProvingKey, polys [][]fr.Element, etaY, etaX,
 				f[2].Add(&IDEtaY, &IDCosetShiftSquareEtaX).Add(&f[2], &o[_i]).Add(&f[2], &gamma)
 				f[0].Mul(&f[0], &f[1]).Mul(&f[0], &f[2])
 
-				t[0].Mul(&sy1[_i], &etaY)
-				t[1].Mul(&sy2[_i], &etaY)
-				t[2].Mul(&sy3[_i], &etaY)
-				g[0].Mul(&sx1[_i], &etaX).Add(&g[0], &t[0]).Add(&g[0], &l[_i]).Add(&g[0], &gamma)
-				g[1].Mul(&sx2[_i], &etaX).Add(&g[1], &t[1]).Add(&g[1], &r[_i]).Add(&g[1], &gamma)
-				g[2].Mul(&sx3[_i], &etaX).Add(&g[2], &t[2]).Add(&g[2], &o[_i]).Add(&g[2], &gamma)
+				for j := 0; j < len(sy); j++ {
+					t[j].Mul(&sy[j][_i], &etaY)
+				}
+				g[0].Mul(&sx[0][_i], &etaX).Add(&g[0], &t[0]).Add(&g[0], &l[_i]).Add(&g[0], &gamma)
+				g[1].Mul(&sx[1][_i], &etaX).Add(&g[1], &t[1]).Add(&g[1], &r[_i]).Add(&g[1], &gamma)
+				g[2].Mul(&sx[2][_i], &etaX).Add(&g[2], &t[2]).Add(&g[2], &o[_i]).Add(&g[2], &gamma)
 				g[0].Mul(&g[0], &g[1]).Mul(&g[0], &g[2])
 
 				t0.Mul(&f[0], &z[_i])
@@ -1052,16 +1039,16 @@ func computeQuotientCanonicalY(pk *ProvingKey, polys [][]fr.Element, etaY, etaX,
 				IDEtaY.Mul(&IDEtaY, &globalDomain[0].Generator)
 
 				// Compute the gate constraint.
-				t1.Mul(&qm[_i], &r[_i])
-				t1.Add(&t1, &ql[_i])
+				t1.Mul(&q[2][_i], &r[_i])
+				t1.Add(&t1, &q[0][_i])
 				t1.Mul(&t1, &l[_i])
 	
-				t0.Mul(&qr[_i], &r[_i])
+				t0.Mul(&q[1][_i], &r[_i])
 				t0.Add(&t0, &t1)
 	
-				t1.Mul(&qo[_i], &o[_i])
+				t1.Mul(&q[3][_i], &o[_i])
 				t0.Add(&t0, &t1)
-				t0.Add(&t0, &qk[_i])
+				t0.Add(&t0, &q[4][_i])
 				h[hStart + _i].Mul(&h[hStart + _i], &lambda).Add(&h[hStart + _i], &t0)
 
 				// Remove Hx(Y, alpha) * (alpha^N - 1)
@@ -1110,18 +1097,20 @@ func checkConstraintX(pk *ProvingKey, evalsXOnAlpha [][]fr.Element, zShiftedAlph
 		l := evalsXOnAlpha[1][k]
 		r := evalsXOnAlpha[2][k]
 		o := evalsXOnAlpha[3][k]
-		ql := evalsXOnAlpha[4][k]
-		qr := evalsXOnAlpha[5][k]
-		qm := evalsXOnAlpha[6][k]
-		qo := evalsXOnAlpha[7][k]
-		qk := evalsXOnAlpha[8][k]
-		sy1 := evalsXOnAlpha[9][k]
-		sy2 := evalsXOnAlpha[10][k]
-		sy3 := evalsXOnAlpha[11][k]
-		sx1 := evalsXOnAlpha[12][k]
-		sx2 := evalsXOnAlpha[13][k]
-		sx3 := evalsXOnAlpha[14][k]
-		z := evalsXOnAlpha[15][k]
+		
+		z := evalsXOnAlpha[4][k]
+		q := make([]fr.Element, len(pk.Q))
+		for i := 0; i < len(q); i++ {
+			q[i] = evalsXOnAlpha[5 + i][k]
+		}
+		sy := make([]fr.Element, len(pk.Sy))
+		for i := 0; i < len(sy); i++ {
+			sy[i] = evalsXOnAlpha[5 + len(q) + i][k]
+		}
+		sx := make([]fr.Element, len(pk.Sx))
+		for i := 0; i < len(sy); i++ {
+			sx[i] = evalsXOnAlpha[5 + len(q) + len(sy) + i][k]
+		}
 		zs := zShiftedAlpha[k]
 		pw := wSmallY[k]
 		cw := wSmallY[(k + 1)%int(mpi.WorldSize)]
@@ -1130,23 +1119,23 @@ func checkConstraintX(pk *ProvingKey, evalsXOnAlpha [][]fr.Element, zShiftedAlph
 
 		// first part: individual constraints
 		var firstPart fr.Element
-		ql.Mul(&ql, &l)
-		qr.Mul(&qr, &r)
-		qm.Mul(&qm, &l).Mul(&qm, &r)
-		qo.Mul(&qo, &o)
-		firstPart.Add(&ql, &qr).Add(&firstPart, &qm).Add(&firstPart, &qo).Add(&firstPart, &qk)
+		q[0].Mul(&q[0], &l)
+		q[1].Mul(&q[1], &r)
+		q[2].Mul(&q[2], &l).Mul(&q[2], &r)
+		q[3].Mul(&q[3], &o)
+		firstPart.Add(&q[0], &q[1]).Add(&firstPart, &q[2]).Add(&firstPart, &q[3]).Add(&firstPart, &q[4])
 
 		// second part:
 		// (1 - L_{n - 1})(z(, omegaX * alpha)()()() - z(, alpha)()()())
 		// + L_{n - 1}(cw * ()()() - pw * z(, alpha)()()())
 		var prodfz, prodg fr.Element
-		sy1.Mul(&sy1, &etaY)
-		sy2.Mul(&sy2, &etaY)
-		sy3.Mul(&sy3, &etaY)
-		sx1.Mul(&sx1, &etaX).Add(&sx1, &sy1).Add(&sx1, &l).Add(&sx1, &gamma)
-		sx2.Mul(&sx2, &etaX).Add(&sx2, &sy2).Add(&sx2, &r).Add(&sx2, &gamma)
-		sx3.Mul(&sx3, &etaX).Add(&sx3, &sy3).Add(&sx3, &o).Add(&sx3, &gamma)
-		prodg.Mul(&sx1, &sx2).Mul(&prodg, &sx3)
+		sy[0].Mul(&sy[0], &etaY)
+		sy[1].Mul(&sy[1], &etaY)
+		sy[2].Mul(&sy[2], &etaY)
+		sx[0].Mul(&sx[0], &etaX).Add(&sx[0], &sy[0]).Add(&sx[0], &l).Add(&sx[0], &gamma)
+		sx[1].Mul(&sx[1], &etaX).Add(&sx[1], &sy[1]).Add(&sx[1], &r).Add(&sx[1], &gamma)
+		sx[2].Mul(&sx[2], &etaX).Add(&sx[2], &sy[2]).Add(&sx[2], &o).Add(&sx[2], &gamma)
+		prodg.Mul(&sx[0], &sx[1]).Mul(&prodg, &sx[2])
 
 		var ualpha, uualpha fr.Element
 		ualpha.Mul(&alpha, &pk.Vk.CosetShift)

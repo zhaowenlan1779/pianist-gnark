@@ -38,17 +38,20 @@ func TestProvingKeySerialization(t *testing.T) {
 	vk.SizeXInv.Add(&vk.SizeXInv, &vk.SizeXInv)
 
 	_, _, g1gen, _ := curve.Generators()
+	vk.Sy = make([]curve.G1Affine, 3)
 	vk.Sy[0] = g1gen
 	vk.Sy[1] = g1gen
 	vk.Sy[2] = g1gen
+	vk.Sx = make([]curve.G1Affine, 3)
 	vk.Sx[0] = g1gen
 	vk.Sx[1] = g1gen
 	vk.Sx[2] = g1gen
-	vk.Ql = g1gen
-	vk.Qr = g1gen
-	vk.Qm = g1gen
-	vk.Qo = g1gen
-	vk.Qk = g1gen
+	vk.Q = make([]curve.G1Affine, 5)
+	vk.Q[0] = g1gen
+	vk.Q[1] = g1gen
+	vk.Q[2] = g1gen
+	vk.Q[3] = g1gen
+	vk.Q[4] = g1gen
 	vk.NbPublicVariables = 8000
 
 	// random pk
@@ -56,16 +59,17 @@ func TestProvingKeySerialization(t *testing.T) {
 	pk.Vk = &vk
 	pk.Domain[0] = *fft.NewDomain(42)
 	pk.Domain[1] = *fft.NewDomain(8 * 42)
-	pk.Ql = make([]fr.Element, pk.Domain[0].Cardinality)
-	pk.Qr = make([]fr.Element, pk.Domain[0].Cardinality)
-	pk.Qm = make([]fr.Element, pk.Domain[0].Cardinality)
-	pk.Qo = make([]fr.Element, pk.Domain[0].Cardinality)
-	pk.Qk = make([]fr.Element, pk.Domain[0].Cardinality)
+	pk.Q = make([][]fr.Element, 5)
+	pk.Q[0] = make([]fr.Element, pk.Domain[0].Cardinality)
+	pk.Q[1] = make([]fr.Element, pk.Domain[0].Cardinality)
+	pk.Q[2] = make([]fr.Element, pk.Domain[0].Cardinality)
+	pk.Q[3] = make([]fr.Element, pk.Domain[0].Cardinality)
+	pk.Q[4] = make([]fr.Element, pk.Domain[0].Cardinality)
 
 	for i := 0; i < 12; i++ {
-		pk.Ql[i].SetOne().Neg(&pk.Ql[i])
-		pk.Qr[i].SetOne()
-		pk.Qo[i].SetUint64(42)
+		pk.Q[0][i].SetOne().Neg(&pk.Q[0][i])
+		pk.Q[1][i].SetOne()
+		pk.Q[3][i].SetUint64(42)
 	}
 
 	pk.PermutationY = make([]int64, 3*globalDomain[0].Cardinality)
@@ -107,17 +111,20 @@ func TestVerifyingKeySerialization(t *testing.T) {
 	vk.SizeXInv.Add(&vk.SizeXInv, &vk.SizeXInv)
 
 	_, _, g1gen, _ := curve.Generators()
+	vk.Sy = make([]curve.G1Affine, 3)
 	vk.Sy[0] = g1gen
 	vk.Sy[1] = g1gen
 	vk.Sy[2] = g1gen
+	vk.Sx = make([]curve.G1Affine, 3)
 	vk.Sx[0] = g1gen
 	vk.Sx[1] = g1gen
 	vk.Sx[2] = g1gen
-	vk.Ql = g1gen
-	vk.Qr = g1gen
-	vk.Qm = g1gen
-	vk.Qo = g1gen
-	vk.Qk = g1gen
+	vk.Q = make([]curve.G1Affine, 5)
+	vk.Q[0] = g1gen
+	vk.Q[1] = g1gen
+	vk.Q[2] = g1gen
+	vk.Q[3] = g1gen
+	vk.Q[4] = g1gen
 
 	var buf bytes.Buffer
 	written, err := vk.WriteTo(&buf)

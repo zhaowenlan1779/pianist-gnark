@@ -54,11 +54,7 @@ type ProvingKey struct {
 	Vk *VerifyingKey
 
 	// qr,ql,qm,qo (in canonical basis).
-	Ql, Qr, Qm, Qo []fr.Element
-
-	// qk in Lagrange basis (canonical basis), prepended with as many zeroes as public inputs.
-	// Storing LQk in Lagrange basis saves a fft...
-	Qk []fr.Element
+	Q [][]fr.Element
 
 	// Domains used for the FFTs.
 	// Domain[0] = small Domain
@@ -67,9 +63,9 @@ type ProvingKey struct {
 	// Domain[0], Domain[1] fft.Domain
 
 	// Permutation polynomials, indicate the index of sub-circuit for the next one.
-	Sy1Canonical, Sy2Canonical, Sy3Canonical     []fr.Element
+	Sy [][]fr.Element
 	// Permutation polynomials, indicate the specific row in some sub-circuit for the next one.
-	Sx1Canonical, Sx2Canonical, Sx3Canonical     []fr.Element
+	Sx [][]fr.Element
 
 	// position -> permuted position (position in [0,3*sizeSystem-1])
 	PermutationY []int64
@@ -99,11 +95,11 @@ type VerifyingKey struct {
 	CosetShift fr.Element
 
 	// S commitments to S1, S2, S3
-	Sy, Sx [3]kzg.Digest
+	Sy, Sx []kzg.Digest
 
 	// Commitments to ql, qr, qm, qo prepended with as many zeroes (ones for l) as there are public inputs.
 	// In particular Qk is not complete.
-	Ql, Qr, Qm, Qo, Qk kzg.Digest
+	Q []kzg.Digest
 }
 
 // Setup sets proving and verifying keys
@@ -216,6 +212,9 @@ func Setup(spr *cs.SparseR1CS, publicWitness bn254witness.Witness) (*ProvingKey,
 	vk.GeneratorX.Set(&pk.Domain[0].Generator)
 	vk.GeneratorXInv.Set(&pk.Domain[0].GeneratorInv)
 	vk.NbPublicVariables = uint64(spr.NbPublicVariables)
+	vk.Q = make([]kzg.Digest, 5)
+	vk.Sy = make([]kzg.Digest, 3)
+	vk.Sx = make([]kzg.Digest, 3)
 
 	dkzgSRS, err := dkzg.NewSRS(vk.SizeX+3, []*big.Int{t, s}, &globalDomain[0].Generator)
 	if err != nil {
@@ -226,20 +225,19 @@ func Setup(spr *cs.SparseR1CS, publicWitness bn254witness.Witness) (*ProvingKey,
 	}
 
 	// public polynomials corresponding to constraints: [ placholders | constraints | assertions ]
-	pk.Ql = make([]fr.Element, pk.Domain[0].Cardinality)
-	pk.Qr = make([]fr.Element, pk.Domain[0].Cardinality)
-	pk.Qm = make([]fr.Element, pk.Domain[0].Cardinality)
-	pk.Qo = make([]fr.Element, pk.Domain[0].Cardinality)
-	pk.Qk = make([]fr.Element, pk.Domain[0].Cardinality)
+	pk.Q = make([][]fr.Element, 5)
+	for i := 0; i < len(pk.Q); i++ {
+		pk.Q[i] = make([]fr.Element, pk.Domain[0].Cardinality)
+	}
 
 	var offset int
 	if mpi.SelfRank == 0 {
 		for i := 0; i < spr.NbPublicVariables; i++ { // placeholders (-PUB_INPUT_i + qk_i = 0) TODO should return error is size is inconsistant
-			pk.Ql[i].SetOne().Neg(&pk.Ql[i])
-			pk.Qr[i].SetZero()
-			pk.Qm[i].SetZero()
-			pk.Qo[i].SetZero()
-			pk.Qk[i].Set(&publicWitness[i])
+			pk.Q[0][i].SetOne().Neg(&pk.Q[0][i])
+			pk.Q[1][i].SetZero()
+			pk.Q[2][i].SetZero()
+			pk.Q[3][i].SetZero()
+			pk.Q[4][i].Set(&publicWitness[i])
 		}
 		offset = spr.NbPublicVariables
 	} else {
@@ -255,24 +253,20 @@ func Setup(spr *cs.SparseR1CS, publicWitness bn254witness.Witness) (*ProvingKey,
 	for i := start; i < end; i++ { // constraints
 		j := i % sizeSystem
 		ii := i - spr.NbPublicVariables
-		pk.Ql[j].Set(&spr.Coefficients[spr.Constraints[ii].L.CoeffID()])
-		pk.Qr[j].Set(&spr.Coefficients[spr.Constraints[ii].R.CoeffID()])
-		pk.Qm[j].Set(&spr.Coefficients[spr.Constraints[ii].M[0].CoeffID()]).
-			Mul(&pk.Qm[j], &spr.Coefficients[spr.Constraints[ii].M[1].CoeffID()])
-		pk.Qo[j].Set(&spr.Coefficients[spr.Constraints[ii].O.CoeffID()])
-		pk.Qk[j].Set(&spr.Coefficients[spr.Constraints[ii].K])
+		pk.Q[0][j].Set(&spr.Coefficients[spr.Constraints[ii].L.CoeffID()])
+		pk.Q[1][j].Set(&spr.Coefficients[spr.Constraints[ii].R.CoeffID()])
+		pk.Q[2][j].Set(&spr.Coefficients[spr.Constraints[ii].M[0].CoeffID()]).
+			Mul(&pk.Q[2][j], &spr.Coefficients[spr.Constraints[ii].M[1].CoeffID()])
+		pk.Q[3][j].Set(&spr.Coefficients[spr.Constraints[ii].O.CoeffID()])
+		pk.Q[4][j].Set(&spr.Coefficients[spr.Constraints[ii].K])
 	}
 
-	pk.Domain[0].FFTInverse(pk.Ql, fft.DIF)
-	pk.Domain[0].FFTInverse(pk.Qr, fft.DIF)
-	pk.Domain[0].FFTInverse(pk.Qm, fft.DIF)
-	pk.Domain[0].FFTInverse(pk.Qo, fft.DIF)
-	pk.Domain[0].FFTInverse(pk.Qk, fft.DIF)
-	fft.BitReverse(pk.Ql)
-	fft.BitReverse(pk.Qr)
-	fft.BitReverse(pk.Qm)
-	fft.BitReverse(pk.Qo)
-	fft.BitReverse(pk.Qk)
+	for i := 0; i < len(pk.Q); i++ {
+		pk.Domain[0].FFTInverse(pk.Q[i], fft.DIF)
+	}
+	for i := 0; i < len(pk.Q); i++ {
+		fft.BitReverse(pk.Q[i])
+	}
 
 	// build permutation. Note: at this stage, the permutation takes in account the placeholders
 	buildPermutation(spr, &pk)
@@ -281,38 +275,20 @@ func Setup(spr *cs.SparseR1CS, publicWitness bn254witness.Witness) (*ProvingKey,
 	ccomputePermutationPolynomials(&pk)
 
 	// Commit to the polynomials to set up the verifying key
-	if vk.Ql, err = dkzg.Commit(pk.Ql, vk.DKZGSRS); err != nil {
-		return nil, nil, err
+	for i := 0; i < len(pk.Q); i++ {
+		if vk.Q[i], err = dkzg.Commit(pk.Q[i], vk.DKZGSRS); err != nil {
+			return nil, nil, err
+		}
 	}
-	if vk.Qr, err = dkzg.Commit(pk.Qr, vk.DKZGSRS); err != nil {
-		return nil, nil, err
+	for i := 0; i < len(pk.Sy); i++ {
+		if vk.Sy[i], err = dkzg.Commit(pk.Sy[i], vk.DKZGSRS); err != nil {
+			return nil, nil, err
+		}
 	}
-	if vk.Qm, err = dkzg.Commit(pk.Qm, vk.DKZGSRS); err != nil {
-		return nil, nil, err
-	}
-	if vk.Qo, err = dkzg.Commit(pk.Qo, vk.DKZGSRS); err != nil {
-		return nil, nil, err
-	}
-	if vk.Qk, err = dkzg.Commit(pk.Qk, vk.DKZGSRS); err != nil {
-		return nil, nil, err
-	}
-	if vk.Sy[0], err = dkzg.Commit(pk.Sy1Canonical, vk.DKZGSRS); err != nil {
-		return nil, nil, err
-	}
-	if vk.Sy[1], err = dkzg.Commit(pk.Sy2Canonical, vk.DKZGSRS); err != nil {
-		return nil, nil, err
-	}
-	if vk.Sy[2], err = dkzg.Commit(pk.Sy3Canonical, vk.DKZGSRS); err != nil {
-		return nil, nil, err
-	}
-	if vk.Sx[0], err = dkzg.Commit(pk.Sx1Canonical, vk.DKZGSRS); err != nil {
-		return nil, nil, err
-	}
-	if vk.Sx[1], err = dkzg.Commit(pk.Sx2Canonical, vk.DKZGSRS); err != nil {
-		return nil, nil, err
-	}
-	if vk.Sx[2], err = dkzg.Commit(pk.Sx3Canonical, vk.DKZGSRS); err != nil {
-		return nil, nil, err
+	for i := 0; i < len(pk.Sx); i++ {
+		if vk.Sx[i], err = dkzg.Commit(pk.Sx[i], vk.DKZGSRS); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	return &pk, &vk, nil
@@ -421,6 +397,9 @@ func SetupRandom(curveID ecc.ID, nbConstraints int, nbPublicInputs int) (*Provin
 	vk.GeneratorX.Set(&pk.Domain[0].Generator)
 	vk.GeneratorXInv.Set(&pk.Domain[0].GeneratorInv)
 	vk.NbPublicVariables = uint64(nbPublicInputs)
+	vk.Q = make([]kzg.Digest, 5)
+	vk.Sy = make([]kzg.Digest, 3)
+	vk.Sx = make([]kzg.Digest, 3)
 
 	dkzgSRS, err := dkzg.NewSRS(vk.SizeX+3, []*big.Int{t, s}, &globalDomain[0].Generator)
 	if err != nil {
@@ -431,11 +410,10 @@ func SetupRandom(curveID ecc.ID, nbConstraints int, nbPublicInputs int) (*Provin
 	}
 
 	// public polynomials corresponding to constraints: [ placholders | constraints | assertions ]
-	pk.Ql = make([]fr.Element, pk.Domain[0].Cardinality)
-	pk.Qr = make([]fr.Element, pk.Domain[0].Cardinality)
-	pk.Qm = make([]fr.Element, pk.Domain[0].Cardinality)
-	pk.Qo = make([]fr.Element, pk.Domain[0].Cardinality)
-	pk.Qk = make([]fr.Element, pk.Domain[0].Cardinality)
+	pk.Q = make([][]fr.Element, 5)
+	for i := 0; i < len(pk.Q); i++ {
+		pk.Q[i] = make([]fr.Element, pk.Domain[0].Cardinality)
+	}
 	pk.PermutationX = make([]int64, 3 * pk.Domain[0].Cardinality)
 	pk.PermutationY = make([]int64, 3 * pk.Domain[0].Cardinality)
 	witnessesL := make([]fr.Element, pk.Domain[0].Cardinality)
@@ -454,16 +432,16 @@ func SetupRandom(curveID ecc.ID, nbConstraints int, nbPublicInputs int) (*Provin
 		witnessesL[j].SetRandom()
 		witnessesR[j].SetRandom()
 		witnessesO[j].SetRandom()
-		pk.Ql[j].SetRandom()
-		pk.Qr[j].SetRandom()
-		pk.Qm[j].SetRandom()
-		pk.Qo[j].SetRandom()
+		pk.Q[0][j].SetRandom()
+		pk.Q[1][j].SetRandom()
+		pk.Q[2][j].SetRandom()
+		pk.Q[3][j].SetRandom()
 
-		prodL.Mul(&pk.Ql[j], &witnessesL[j])
-		prodR.Mul(&pk.Qr[j], &witnessesR[j])
-		prodO.Mul(&pk.Qo[j], &witnessesO[j])
-		prodM.Mul(&pk.Qm[j], &witnessesL[j]).Mul(&prodM, &witnessesR[j])
-		pk.Qk[j].SetZero().Sub(&pk.Qk[j], &prodL).Sub(&pk.Qk[j], &prodR).Sub(&pk.Qk[j], &prodO).Sub(&pk.Qk[j], &prodM)	
+		prodL.Mul(&pk.Q[0][j], &witnessesL[j])
+		prodR.Mul(&pk.Q[1][j], &witnessesR[j])
+		prodO.Mul(&pk.Q[3][j], &witnessesO[j])
+		prodM.Mul(&pk.Q[2][j], &witnessesL[j]).Mul(&prodM, &witnessesR[j])
+		pk.Q[4][j].SetZero().Sub(&pk.Q[4][j], &prodL).Sub(&pk.Q[4][j], &prodR).Sub(&pk.Q[4][j], &prodO).Sub(&pk.Q[4][j], &prodM)	
 	}
 
 	for i := start; i < end; i++ {
@@ -478,53 +456,31 @@ func SetupRandom(curveID ecc.ID, nbConstraints int, nbPublicInputs int) (*Provin
 		pk.PermutationY[j + 2 * sizeSystem] = int64(mpi.SelfRank)
 	}
 
-	pk.Domain[0].FFTInverse(pk.Ql, fft.DIF)
-	pk.Domain[0].FFTInverse(pk.Qr, fft.DIF)
-	pk.Domain[0].FFTInverse(pk.Qm, fft.DIF)
-	pk.Domain[0].FFTInverse(pk.Qo, fft.DIF)
-	pk.Domain[0].FFTInverse(pk.Qk, fft.DIF)
-	fft.BitReverse(pk.Ql)
-	fft.BitReverse(pk.Qr)
-	fft.BitReverse(pk.Qm)
-	fft.BitReverse(pk.Qo)
-	fft.BitReverse(pk.Qk)
+	for i := 0; i < len(pk.Q); i++ {
+		pk.Domain[0].FFTInverse(pk.Q[i], fft.DIF)
+	}
+	for i := 0; i < len(pk.Q); i++ {
+		fft.BitReverse(pk.Q[i])
+	}
 
 	// set s1, s2, s3
 	ccomputePermutationPolynomials(&pk)
 
 	// Commit to the polynomials to set up the verifying key
-	if vk.Ql, err = dkzg.Commit(pk.Ql, vk.DKZGSRS); err != nil {
-		return nil, nil, nil, err
+	for i := 0; i < len(pk.Q); i++ {
+		if vk.Q[i], err = dkzg.Commit(pk.Q[i], vk.DKZGSRS); err != nil {
+			return nil, nil, nil, err
+		}
 	}
-	if vk.Qr, err = dkzg.Commit(pk.Qr, vk.DKZGSRS); err != nil {
-		return nil, nil, nil, err
+	for i := 0; i < len(pk.Sy); i++ {
+		if vk.Sy[i], err = dkzg.Commit(pk.Sy[i], vk.DKZGSRS); err != nil {
+			return nil, nil, nil, err
+		}
 	}
-	if vk.Qm, err = dkzg.Commit(pk.Qm, vk.DKZGSRS); err != nil {
-		return nil, nil, nil, err
-	}
-	if vk.Qo, err = dkzg.Commit(pk.Qo, vk.DKZGSRS); err != nil {
-		return nil, nil, nil, err
-	}
-	if vk.Qk, err = dkzg.Commit(pk.Qk, vk.DKZGSRS); err != nil {
-		return nil, nil, nil, err
-	}
-	if vk.Sy[0], err = dkzg.Commit(pk.Sy1Canonical, vk.DKZGSRS); err != nil {
-		return nil, nil, nil, err
-	}
-	if vk.Sy[1], err = dkzg.Commit(pk.Sy2Canonical, vk.DKZGSRS); err != nil {
-		return nil, nil, nil, err
-	}
-	if vk.Sy[2], err = dkzg.Commit(pk.Sy3Canonical, vk.DKZGSRS); err != nil {
-		return nil, nil, nil, err
-	}
-	if vk.Sx[0], err = dkzg.Commit(pk.Sx1Canonical, vk.DKZGSRS); err != nil {
-		return nil, nil, nil, err
-	}
-	if vk.Sx[1], err = dkzg.Commit(pk.Sx2Canonical, vk.DKZGSRS); err != nil {
-		return nil, nil, nil, err
-	}
-	if vk.Sx[2], err = dkzg.Commit(pk.Sx3Canonical, vk.DKZGSRS); err != nil {
-		return nil, nil, nil, err
+	for i := 0; i < len(pk.Sx); i++ {
+		if vk.Sx[i], err = dkzg.Commit(pk.Sx[i], vk.DKZGSRS); err != nil {
+			return nil, nil, nil, err
+		}
 	}
 
 	return &pk, &vk, [][]fr.Element{witnessesL, witnessesR, witnessesO}, nil
@@ -630,33 +586,35 @@ func ccomputePermutationPolynomials(pk *ProvingKey) {
 	IDxs := getIDxSmallDomain(&pk.Domain[0])
 
 	// Lagrange form of S1, S2, S3
-	pk.Sy1Canonical = make([]fr.Element, n)
-	pk.Sy2Canonical = make([]fr.Element, n)
-	pk.Sy3Canonical = make([]fr.Element, n)
-	pk.Sx1Canonical = make([]fr.Element, n)
-	pk.Sx2Canonical = make([]fr.Element, n)
-	pk.Sx3Canonical = make([]fr.Element, n)
+	pk.Sy = make([][]fr.Element, 3)
+	for i := 0; i < len(pk.Sy); i++ {
+		pk.Sy[i] = make([]fr.Element, n)
+	}
+	pk.Sx = make([][]fr.Element, 3)
+	for i := 0; i < len(pk.Sx); i++ {
+		pk.Sx[i] = make([]fr.Element, n)
+	}
 	for i := 0; i < n; i++ {
-		pk.Sy1Canonical[i].Set(&IDys[pk.PermutationY[i]])
-		pk.Sy2Canonical[i].Set(&IDys[pk.PermutationY[n+i]])
-		pk.Sy3Canonical[i].Set(&IDys[pk.PermutationY[2*n+i]])
-		pk.Sx1Canonical[i].Set(&IDxs[pk.PermutationX[i]])
-		pk.Sx2Canonical[i].Set(&IDxs[pk.PermutationX[n+i]])
-		pk.Sx3Canonical[i].Set(&IDxs[pk.PermutationX[2*n+i]])
+		pk.Sy[0][i].Set(&IDys[pk.PermutationY[i]])
+		pk.Sy[1][i].Set(&IDys[pk.PermutationY[n+i]])
+		pk.Sy[2][i].Set(&IDys[pk.PermutationY[2*n+i]])
+		pk.Sx[0][i].Set(&IDxs[pk.PermutationX[i]])
+		pk.Sx[1][i].Set(&IDxs[pk.PermutationX[n+i]])
+		pk.Sx[2][i].Set(&IDxs[pk.PermutationX[2*n+i]])
 	}
 
-	pk.Domain[0].FFTInverse(pk.Sy1Canonical, fft.DIF)
-	pk.Domain[0].FFTInverse(pk.Sy2Canonical, fft.DIF)
-	pk.Domain[0].FFTInverse(pk.Sy3Canonical, fft.DIF)
-	pk.Domain[0].FFTInverse(pk.Sx1Canonical, fft.DIF)
-	pk.Domain[0].FFTInverse(pk.Sx2Canonical, fft.DIF)
-	pk.Domain[0].FFTInverse(pk.Sx3Canonical, fft.DIF)
-	fft.BitReverse(pk.Sy1Canonical)
-	fft.BitReverse(pk.Sy2Canonical)
-	fft.BitReverse(pk.Sy3Canonical)
-	fft.BitReverse(pk.Sx1Canonical)
-	fft.BitReverse(pk.Sx2Canonical)
-	fft.BitReverse(pk.Sx3Canonical)
+	for i := 0; i < len(pk.Sy); i++ {
+		pk.Domain[0].FFTInverse(pk.Sy[i], fft.DIF)
+	}
+	for i := 0; i < len(pk.Sx); i++ {
+		pk.Domain[0].FFTInverse(pk.Sx[i], fft.DIF)
+	}
+	for i := 0; i < len(pk.Sy); i++ {
+		fft.BitReverse(pk.Sy[i])
+	}
+	for i := 0; i < len(pk.Sx); i++ {
+		fft.BitReverse(pk.Sx[i])
+	}
 }
 
 // getIDxSmallDomain returns the Lagrange form of ID on the small domain

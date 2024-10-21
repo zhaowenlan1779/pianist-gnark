@@ -99,25 +99,19 @@ func Verify(proof *Proof, vk *VerifyingKey, publicWitness bn254witness.Witness) 
 	foldedHxDigest.ScalarMultiplication(&foldedHxDigest, &alphaNBigInt)
 	foldedHxDigest.Add(&foldedHxDigest, &proof.Hx[0])
 
+	digests := []dkzg.Digest{
+		foldedHxDigest,
+		proof.LRO[0],
+		proof.LRO[1],
+		proof.LRO[2],
+		proof.Z,
+	}
+	digests = append(digests, vk.Q...)
+	digests = append(digests, vk.Sy...)
+	digests = append(digests, vk.Sx...)
+
 	foldedPartialProof, foldedPartialDigest, err := dkzg.FoldProof(
-		[]dkzg.Digest{
-			foldedHxDigest,
-			proof.LRO[0],
-			proof.LRO[1],
-			proof.LRO[2],
-			vk.Ql,
-			vk.Qr,
-			vk.Qm,
-			vk.Qo,
-			vk.Qk,
-			vk.Sy[0],
-			vk.Sy[1],
-			vk.Sy[2],
-			vk.Sx[0],
-			vk.Sx[1],
-			vk.Sx[2],
-			proof.Z,
-		},
+		digests,
 		&proof.PartialBatchedProof,
 		alpha,
 		hFunc)
@@ -226,40 +220,22 @@ func unpack(src []fr.Element, dst ...*fr.Element) {
 
 func bindPublicData(fs *fiatshamir.Transcript, challenge string, vk VerifyingKey, publicInputs []fr.Element) error {
 	// permutation
-	if err := fs.Bind(challenge, vk.Sy[0].Marshal()); err != nil {
-		return err
+	for i := 0; i < len(vk.Sy); i++ {
+		if err := fs.Bind(challenge, vk.Sy[i].Marshal()); err != nil {
+			return err
+		}
 	}
-	if err := fs.Bind(challenge, vk.Sy[1].Marshal()); err != nil {
-		return err
-	}
-	if err := fs.Bind(challenge, vk.Sy[2].Marshal()); err != nil {
-		return err
-	}
-	if err := fs.Bind(challenge, vk.Sx[0].Marshal()); err != nil {
-		return err
-	}
-	if err := fs.Bind(challenge, vk.Sx[1].Marshal()); err != nil {
-		return err
-	}
-	if err := fs.Bind(challenge, vk.Sx[2].Marshal()); err != nil {
-		return err
+	for i := 0; i < len(vk.Sx); i++ {
+		if err := fs.Bind(challenge, vk.Sx[i].Marshal()); err != nil {
+			return err
+		}
 	}
 
 	// coefficients
-	if err := fs.Bind(challenge, vk.Ql.Marshal()); err != nil {
-		return err
-	}
-	if err := fs.Bind(challenge, vk.Qr.Marshal()); err != nil {
-		return err
-	}
-	if err := fs.Bind(challenge, vk.Qm.Marshal()); err != nil {
-		return err
-	}
-	if err := fs.Bind(challenge, vk.Qo.Marshal()); err != nil {
-		return err
-	}
-	if err := fs.Bind(challenge, vk.Qk.Marshal()); err != nil {
-		return err
+	for i := 0; i < len(vk.Q); i++ {
+		if err := fs.Bind(challenge, vk.Q[i].Marshal()); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -314,40 +290,33 @@ func checkConstraintY(vk *VerifyingKey, evalsYOnBeta []fr.Element, ws, etaY, eta
 	l := evalsYOnBeta[1]
 	r := evalsYOnBeta[2]
 	o := evalsYOnBeta[3]
-	ql := evalsYOnBeta[4]
-	qr := evalsYOnBeta[5]
-	qm := evalsYOnBeta[6]
-	qo := evalsYOnBeta[7]
-	qk := evalsYOnBeta[8]
-	sy1 := evalsYOnBeta[9]
-	sy2 := evalsYOnBeta[10]
-	sy3 := evalsYOnBeta[11]
-	sx1 := evalsYOnBeta[12]
-	sx2 := evalsYOnBeta[13]
-	sx3 := evalsYOnBeta[14]
-	z := evalsYOnBeta[15]
-	zs := evalsYOnBeta[16]
-	w := evalsYOnBeta[17]
-	hy := evalsYOnBeta[18]
+	z := evalsYOnBeta[4]
+	q := append([]fr.Element(nil), evalsYOnBeta[5:5+len(vk.Q)]...)
+	sy := append([]fr.Element(nil), evalsYOnBeta[5+len(vk.Q):5+len(vk.Q)+len(vk.Sy)]...)
+	sx := append([]fr.Element(nil), evalsYOnBeta[5+len(vk.Q)+len(vk.Sy):5+len(vk.Q)+len(vk.Sy)+len(vk.Sx)]...)
+	offset := 5 + len(vk.Q) + len(vk.Sy) + len(vk.Sx)
+	zs := evalsYOnBeta[offset]
+	w := evalsYOnBeta[offset + 1]
+	hy := evalsYOnBeta[offset + 2]
 	// first part: individual constraints
 	var firstPart fr.Element
-	ql.Mul(&ql, &l)
-	qr.Mul(&qr, &r)
-	qm.Mul(&qm, &l).Mul(&qm, &r)
-	qo.Mul(&qo, &o)
-	firstPart.Add(&ql, &qr).Add(&firstPart, &qm).Add(&firstPart, &qo).Add(&firstPart, &qk)
+	q[0].Mul(&q[0], &l)
+	q[1].Mul(&q[1], &r)
+	q[2].Mul(&q[2], &l).Mul(&q[2], &r)
+	q[3].Mul(&q[3], &o)
+	firstPart.Add(&q[0], &q[1]).Add(&firstPart, &q[2]).Add(&firstPart, &q[3]).Add(&firstPart, &q[4])
 
 	// second part:
 	// (1 - L_{n - 1})(z(, omegaX * alpha)()()() - z(, alpha)()()())
 	// + L_{n - 1}(cw * ()()() - pw * z(, alpha)()()())
 	var prodfz, prodg fr.Element
-	sy1.Mul(&sy1, &etaY)
-	sy2.Mul(&sy2, &etaY)
-	sy3.Mul(&sy3, &etaY)
-	sx1.Mul(&sx1, &etaX).Add(&sx1, &sy1).Add(&sx1, &l).Add(&sx1, &gamma)
-	sx2.Mul(&sx2, &etaX).Add(&sx2, &sy2).Add(&sx2, &r).Add(&sx2, &gamma)
-	sx3.Mul(&sx3, &etaX).Add(&sx3, &sy3).Add(&sx3, &o).Add(&sx3, &gamma)
-	prodg.Mul(&sx1, &sx2).Mul(&prodg, &sx3)
+	sy[0].Mul(&sy[0], &etaY)
+	sy[1].Mul(&sy[1], &etaY)
+	sy[2].Mul(&sy[2], &etaY)
+	sx[0].Mul(&sx[0], &etaX).Add(&sx[0], &sy[0]).Add(&sx[0], &l).Add(&sx[0], &gamma)
+	sx[1].Mul(&sx[1], &etaX).Add(&sx[1], &sy[1]).Add(&sx[1], &r).Add(&sx[1], &gamma)
+	sx[2].Mul(&sx[2], &etaX).Add(&sx[2], &sy[2]).Add(&sx[2], &o).Add(&sx[2], &gamma)
+	prodg.Mul(&sx[0], &sx[1]).Mul(&prodg, &sx[2])
 
 	var alphaEta, ualphaEta, uualphaEta fr.Element
 	alphaEta.Mul(&alpha, &etaX)
