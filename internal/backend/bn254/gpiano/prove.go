@@ -1035,9 +1035,16 @@ func computeQuotientCanonicalY(pk *ProvingKey, polys [][]fr.Element, etaY, etaX,
 
 	globalDomain[1].FFTInverse(h, fft.DIT, true)
 
-	outH := make([][]fr.Element, 4)
+	outH := make([][]fr.Element, MAX_DEGREE)
 	for i := uint64(0); i < uint64(len(outH)); i++ {
 		outH[i] = h[i*n:(i+1)*n]
+	}
+
+	for i := int(MAX_DEGREE * n); i < len(h); i++ {
+		// fmt.Println(h[i].String())
+		if !h[i].IsZero() {
+			panic("invalid proof: wrong h degree")
+		}
 	}
 	return outH
 }

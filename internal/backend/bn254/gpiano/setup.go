@@ -299,7 +299,7 @@ func SetupRandom(curveID ecc.ID, nbConstraints int, nbPublicInputs int) (*Provin
 	if globalDomain[0].Cardinality != mpi.WorldSize {
 		return nil, nil, nil, fmt.Errorf("mpi.WorldSize is not a power of 2")
 	}
-	globalDomain[1] = fft.NewDomain(4 * mpi.WorldSize)
+	globalDomain[1] = fft.NewDomain(8 * mpi.WorldSize)
 
 	var pk ProvingKey
 	var vk VerifyingKey
