@@ -59,8 +59,8 @@ type Proof struct {
 	// Hx = Hx1 + (X**N) * Hx2 + (X**(2N)) * Hx3 and
 	// commitments to Hy1, Hy2, Hy3 such that
 	// Hy = Hy1 + (Y**M) * Hy2 + (Y**(2M)) * Hy3
-	Hx [4]dkzg.Digest
-	Hy [4]kzg.Digest
+	Hx []dkzg.Digest
+	Hy []kzg.Digest
 
 	// Batch partially opening proof of
 	// foldedHx(Y, X) = Hx1(Y, X) + alpha*Hx2(Y, X) + (alpha**2)*Hx3(Y, X),
@@ -220,12 +220,12 @@ func ProveCommon(fs *fiatshamir.Transcript,
 		return nil, err
 	}
 
-	hx1, hx2, hx3, hx4 := computeQuotientCanonicalX(pk, witCanonicalX, zCanonicalX, *pW, *cW, etaY, etaX, gamma, lambda)
+	hx := computeQuotientCanonicalX(pk, witCanonicalX, zCanonicalX, *pW, *cW, etaY, etaX, gamma, lambda)
 
 	// print vector of hx1, hx2, hx3, hx4
 
 	// compute kzg commitments of Hx1, Hx2, Hx3, Hx4
-	if err := commitToQuotientX(hx1, hx2, hx3, hx4, proof, pk.Vk.DKZGSRS); err != nil {
+	if err := commitToQuotientX(hx, proof, pk.Vk.DKZGSRS); err != nil {
 		return nil, err
 	}
 
@@ -254,24 +254,20 @@ func ProveCommon(fs *fiatshamir.Transcript,
 	var alphaPowerN fr.Element
 	alphaPowerN.Exp(alpha, &bSize)
 	alphaPowerN.ToBigIntRegular(&bAlphaPowerN)
-	foldedHxDigest := proof.Hx[3]
-	foldedHxDigest.ScalarMultiplication(&foldedHxDigest, &bAlphaPowerN)
-	foldedHxDigest.Add(&foldedHxDigest, &proof.Hx[2])
-	foldedHxDigest.ScalarMultiplication(&foldedHxDigest, &bAlphaPowerN)
-	foldedHxDigest.Add(&foldedHxDigest, &proof.Hx[1])                  
-	foldedHxDigest.ScalarMultiplication(&foldedHxDigest, &bAlphaPowerN)
-	foldedHxDigest.Add(&foldedHxDigest, &proof.Hx[0])                  
+	foldedHxDigest := proof.Hx[len(proof.Hx) - 1]
+	for i := len(proof.Hx) - 2; i >= 0; i-- {
+		foldedHxDigest.ScalarMultiplication(&foldedHxDigest, &bAlphaPowerN)
+		foldedHxDigest.Add(&foldedHxDigest, &proof.Hx[i])
+	}
 
 	// foldedHx = Hx1 + (alpha**(N))*Hx2 + (alpha**(2(N)))*Hx3
-	foldedHx := hx4
+	foldedHx := hx[len(hx) - 1]
 	utils.Parallelize(len(foldedHx), func(start, end int) {
 		for i := start; i < end; i++ {
-			foldedHx[i].Mul(&foldedHx[i], &alphaPowerN)
-			foldedHx[i].Add(&foldedHx[i], &hx3[i])
-			foldedHx[i].Mul(&foldedHx[i], &alphaPowerN)
-			foldedHx[i].Add(&foldedHx[i], &hx2[i])
-			foldedHx[i].Mul(&foldedHx[i], &alphaPowerN)
-			foldedHx[i].Add(&foldedHx[i], &hx1[i])
+			for j := len(hx) - 2; j >= 0; j-- {
+				foldedHx[i].Mul(&foldedHx[i], &alphaPowerN)
+				foldedHx[i].Add(&foldedHx[i], &hx[j][i])
+			}
 		}
 	})
 
@@ -338,7 +334,7 @@ func ProveCommon(fs *fiatshamir.Transcript,
 	polysCanonicalY = append(polysCanonicalY, wCanonicalY)
 
 	// compute Hy in canonical form
-	hy1, hy2, hy3, hy4 := computeQuotientCanonicalY(pk,
+	hy := computeQuotientCanonicalY(pk,
 		polysCanonicalY,
 		etaY,
 		etaX,
@@ -348,7 +344,7 @@ func ProveCommon(fs *fiatshamir.Transcript,
 	)
 
 	// compute kzg commitments of Hy1, Hy2 and Hy3
-	if err := commitToQuotientOnY(hy1, hy2, hy3, hy4, proof, globalSRS); err != nil {
+	if err := commitToQuotientOnY(hy, proof, globalSRS); err != nil {
 		return nil, err
 	}
 	// derive beta
@@ -372,22 +368,21 @@ func ProveCommon(fs *fiatshamir.Transcript,
 	var betaPowerM fr.Element
 	betaPowerM.Exp(beta, &bSize)
 	betaPowerM.ToBigIntRegular(&bBetaPowerM)
-	foldedHyDigest := proof.Hy[3]
-	foldedHyDigest.ScalarMultiplication(&foldedHyDigest, &bBetaPowerM)
-	foldedHyDigest.Add(&foldedHyDigest, &proof.Hy[2])
-	foldedHyDigest.ScalarMultiplication(&foldedHyDigest, &bBetaPowerM)
-	foldedHyDigest.Add(&foldedHyDigest, &proof.Hy[1])
-	foldedHyDigest.ScalarMultiplication(&foldedHyDigest, &bBetaPowerM)
-	foldedHyDigest.Add(&foldedHyDigest, &proof.Hy[0])
-	foldedHy := hy4
+
+	foldedHyDigest := proof.Hy[len(proof.Hy) - 1]
+	for i := len(proof.Hy) - 2; i >= 0; i-- {
+		foldedHyDigest.ScalarMultiplication(&foldedHyDigest, &bBetaPowerM)
+		foldedHyDigest.Add(&foldedHyDigest, &proof.Hy[i])
+	}
+
+	// foldedHx = Hx1 + (alpha**(N))*Hx2 + (alpha**(2(N)))*Hx3
+	foldedHy := hy[len(hy) - 1]
 	utils.Parallelize(len(foldedHy), func(start, end int) {
 		for i := start; i < end; i++ {
-			foldedHy[i].Mul(&foldedHy[i], &betaPowerM)
-			foldedHy[i].Add(&foldedHy[i], &hy3[i])
-			foldedHy[i].Mul(&foldedHy[i], &betaPowerM)
-			foldedHy[i].Add(&foldedHy[i], &hy2[i])
-			foldedHy[i].Mul(&foldedHy[i], &betaPowerM)
-			foldedHy[i].Add(&foldedHy[i], &hy1[i])
+			for j := len(hy) - 2; j >= 0; j-- {
+				foldedHy[i].Mul(&foldedHy[i], &betaPowerM)
+				foldedHy[i].Add(&foldedHy[i], &hy[j][i])
+			}
 		}
 	})
 
@@ -463,41 +458,29 @@ func commitWitnesses(witnesses [][]fr.Element, proof *Proof, srs *dkzg.SRS) erro
 	return err
 }
 
-func commitToQuotientX(h1, h2, h3, h4 []fr.Element, proof *Proof, srs *dkzg.SRS) error {
+func commitToQuotientX(h [][]fr.Element, proof *Proof, srs *dkzg.SRS) error {
 	n := runtime.NumCPU() / 2
 	var err error
-	proof.Hx[0], err = dkzg.Commit(h1, srs, n)
-	if err != nil {
-		return err
+	proof.Hx = make([]curve.G1Affine, len(h))
+	for i := 0; i < len(h); i++ {
+		proof.Hx[i], err = dkzg.Commit(h[i], srs, n)
+		if err != nil {
+			return err
+		}
 	}
-	proof.Hx[1], err = dkzg.Commit(h2, srs, n)
-	if err != nil {
-		return err
-	}
-	proof.Hx[2], err = dkzg.Commit(h3, srs, n)
-	if err != nil {
-		return err
-	}
-	proof.Hx[3], err = dkzg.Commit(h4, srs, n)
 	return err
 }
 
-func commitToQuotientOnY(h1, h2, h3, h4 []fr.Element, proof *Proof, srs *kzg.SRS) error {
+func commitToQuotientOnY(h [][]fr.Element, proof *Proof, srs *kzg.SRS) error {
 	n := runtime.NumCPU() / 2
 	var err error
-	proof.Hy[0], err = kzg.Commit(h1, srs, n)
-	if err != nil {
-		return err
+	proof.Hy = make([]curve.G1Affine, len(h))
+	for i := 0; i < len(h); i++ {
+		proof.Hy[i], err = kzg.Commit(h[i], srs, n)
+		if err != nil {
+			return err
+		}
 	}
-	proof.Hy[1], err = kzg.Commit(h2, srs, n)
-	if err != nil {
-		return err
-	}
-	proof.Hy[2], err = kzg.Commit(h3, srs, n)
-	if err != nil {
-		return err
-	}
-	proof.Hy[3], err = kzg.Commit(h4, srs, n)
 	return err
 }
 
@@ -734,6 +717,8 @@ func evaluateXnMinusOneBig(domainBig, domainSmall *fft.Domain) []fr.Element {
 	return res
 }
 
+const MAX_DEGREE = 5
+
 // computeQuotientCanonicalX computes hx in canonical form, split as
 // hx1 + (X**N)hx2 + (X**(2N))h3 + (X**(3N))h4 such that
 //
@@ -744,7 +729,7 @@ func evaluateXnMinusOneBig(domainBig, domainSmall *fft.Domain) []fr.Element {
 // )
 // + (lambda**2) * L0(X)*(z(X)-1)
 // = hx(X)Zn(X)
-func computeQuotientCanonicalX(pk *ProvingKey, witCanonicalX [][]fr.Element, zCanonicalX []fr.Element, pW, cW, etaY, etaX, gamma, lambda fr.Element) ([]fr.Element, []fr.Element, []fr.Element, []fr.Element) {
+func computeQuotientCanonicalX(pk *ProvingKey, witCanonicalX [][]fr.Element, zCanonicalX []fr.Element, pW, cW, etaY, etaX, gamma, lambda fr.Element) [][]fr.Element {
 	ratio := pk.Domain[1].Cardinality / pk.Domain[0].Cardinality
 
 	// Compute the power of domain[1].Generator with bit-reversed order.
@@ -786,17 +771,17 @@ func computeQuotientCanonicalX(pk *ProvingKey, witCanonicalX [][]fr.Element, zCa
 		l0 := pk.Domain[0].FFTPart(Lag0, fft.DIF, factorsBR[_j], true)
 		ll := pk.Domain[0].FFTPart(LagLst, fft.DIF, factorsBR[_j], true)
 
-		sy := make([][]fr.Element, 3)
+		sy := make([][]fr.Element, len(pk.Sy))
 		for i := 0; i < len(pk.Sy); i++ {
 			sy[i] = pk.Domain[0].FFTPart(pk.Sy[i], fft.DIF, factorsBR[_j], true)
 		}
-		sx := make([][]fr.Element, 3)
+		sx := make([][]fr.Element, len(pk.Sx))
 		for i := 0; i < len(pk.Sy); i++ {
 			sx[i] = pk.Domain[0].FFTPart(pk.Sx[i], fft.DIF, factorsBR[_j], true)
 		}
 		z := pk.Domain[0].FFTPart(zCanonicalX, fft.DIF, factorsBR[_j], true)
 
-		q := make([][]fr.Element, 5)
+		q := make([][]fr.Element, len(pk.Q))
 		for i := 0; i < len(pk.Q); i++ {
 			q[i] = pk.Domain[0].FFTPart(pk.Q[i], fft.DIF, factorsBR[_j], true)
 		}
@@ -862,15 +847,7 @@ func computeQuotientCanonicalX(pk *ProvingKey, witCanonicalX [][]fr.Element, zCa
 				IDEtaX.Mul(&IDEtaX, &pk.Domain[0].Generator)
 
 				// Compute gate constraint
-				t1.Mul(&q[2][_i], &witnesses[1][_i])
-				t1.Add(&t1, &q[0][_i])
-				t1.Mul(&t1, &witnesses[0][_i])
-	
-				t0.Mul(&q[1][_i], &witnesses[1][_i])
-				t0.Add(&t0, &t1)
-	
-				t1.Mul(&q[3][_i], &witnesses[2][_i])
-				t0.Add(&t0, &t1).Add(&t0, &q[4][_i])
+				gateFunc(witnesses, q, _i, &t0, &t1)
 				h[hStart + _i].Mul(&h[hStart + _i], &lambda).Add(&h[hStart + _i], &t0)
 			}
 		})
@@ -887,19 +864,19 @@ func computeQuotientCanonicalX(pk *ProvingKey, witCanonicalX [][]fr.Element, zCa
 	})
 	pk.Domain[1].FFTInverse(h, fft.DIT, true)
 
-	h1 := h[:n]
-	h2 := h[n: 2*n]
-	h3 := h[2*n: 3*n]
-	h4 := h[3*n: 4*n]
-
-	for i := int(4 * n); i < len(h); i++ {
-		fmt.Println(h[i].String())
-		// if !h[i].IsZero() {
-		// 	panic("invalid proof: wrong h degree")
-		// }
+	outH := make([][]fr.Element, MAX_DEGREE)
+	for i := uint64(0); i < uint64(len(outH)); i++ {
+		outH[i] = h[i*n:(i+1)*n]
 	}
 
-	return h1, h2, h3, h4
+	for i := int(MAX_DEGREE * n); i < len(h); i++ {
+		// fmt.Println(h[i].String())
+		if !h[i].IsZero() {
+			panic("invalid proof: wrong h degree")
+		}
+	}
+
+	return outH
 }
 
 // computeQuotientCanonicalY computes Hy in canonical form, split as
@@ -913,7 +890,7 @@ func computeQuotientCanonicalX(pk *ProvingKey, witCanonicalX [][]fr.Element, zCa
 // + lambda**2 * Lx0(alpha)*(Z(Y, alpha) - 1)
 // + lambda**3 * Ly0(Y)(W(Y) - 1)
 // - Hx(Y, alpha)Zn(X) = Hy(Y)Zm(Y)
-func computeQuotientCanonicalY(pk *ProvingKey, polys [][]fr.Element, etaY, etaX, gamma, lambda, alpha fr.Element) ([]fr.Element, []fr.Element, []fr.Element, []fr.Element) {
+func computeQuotientCanonicalY(pk *ProvingKey, polys [][]fr.Element, etaY, etaX, gamma, lambda, alpha fr.Element) [][]fr.Element {
 	h := make([]fr.Element, globalDomain[1].Cardinality)
 	ratio := globalDomain[1].Cardinality / globalDomain[0].Cardinality
 
@@ -1033,16 +1010,7 @@ func computeQuotientCanonicalY(pk *ProvingKey, polys [][]fr.Element, etaY, etaX,
 				IDEtaY.Mul(&IDEtaY, &globalDomain[0].Generator)
 
 				// Compute the gate constraint.
-				t1.Mul(&q[2][_i], &witnesses[1][_i])
-				t1.Add(&t1, &q[0][_i])
-				t1.Mul(&t1, &witnesses[0][_i])
-	
-				t0.Mul(&q[1][_i], &witnesses[1][_i])
-				t0.Add(&t0, &t1)
-	
-				t1.Mul(&q[3][_i], &witnesses[2][_i])
-				t0.Add(&t0, &t1)
-				t0.Add(&t0, &q[4][_i])
+				gateFunc(witnesses, q, _i, &t0, &t1)
 				h[hStart + _i].Mul(&h[hStart + _i], &lambda).Add(&h[hStart + _i], &t0)
 
 				// Remove Hx(Y, alpha) * (alpha^N - 1)
@@ -1064,11 +1032,11 @@ func computeQuotientCanonicalY(pk *ProvingKey, polys [][]fr.Element, etaY, etaX,
 
 	globalDomain[1].FFTInverse(h, fft.DIT, true)
 
-	h1 := h[:n]
-	h2 := h[n : 2*n]
-	h3 := h[2*n : 3*n]
-	h4 := h[3*n : 4*n]
-	return h1, h2, h3, h4
+	outH := make([][]fr.Element, 4)
+	for i := uint64(0); i < uint64(len(outH)); i++ {
+		outH[i] = h[i*n:(i+1)*n]
+	}
+	return outH
 }
 
 // checkConstraintX checks that the constraint is satisfied
@@ -1121,12 +1089,9 @@ func checkConstraintX(pk *ProvingKey, evalsXOnAlpha [][]fr.Element, zShiftedAlph
 		IDEtaY.Exp(globalDomain[0].Generator, big.NewInt(int64(k))).Mul(&IDEtaY, &etaY)
 
 		// first part: individual constraints
+		var tmp fr.Element
 		var firstPart fr.Element
-		q[0].Mul(&q[0], &witnesses[0])
-		q[1].Mul(&q[1], &witnesses[1])
-		q[2].Mul(&q[2], &witnesses[0]).Mul(&q[2], &witnesses[1])
-		q[3].Mul(&q[3], &witnesses[2])
-		firstPart.Add(&q[0], &q[1]).Add(&firstPart, &q[2]).Add(&firstPart, &q[3]).Add(&firstPart, &q[4])
+		gateFuncSingle(witnesses, q, &firstPart, &tmp)
 
 		// second part:
 		// (1 - L_{n - 1})(z(, omegaX * alpha)()()() - z(, alpha)()()())
@@ -1145,7 +1110,6 @@ func checkConstraintX(pk *ProvingKey, evalsXOnAlpha [][]fr.Element, zShiftedAlph
 
 		prodfz.Set(&z)
 
-		var tmp fr.Element
 		for i := 0; i < len(witnesses); i++ {
 			tmp.Add(&IDEtaXShifted[i], &IDEtaY).Add(&tmp, &witnesses[i]).Add(&tmp, &gamma)
 			prodfz.Mul(&prodfz, &tmp)

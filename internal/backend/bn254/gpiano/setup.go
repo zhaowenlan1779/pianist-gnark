@@ -387,7 +387,7 @@ func SetupRandom(curveID ecc.ID, nbConstraints int, nbPublicInputs int) (*Provin
 	// h, the quotient polynomial is of degree 3(n+1)+2, so it's in a 3(n+2) dim vector space,
 	// the domain is the next power of 2 superior to 3(n+2). 4*domainNum is enough in all cases
 	// except when n<6.
-	pk.Domain[1] = *fft.NewDomain(uint64(4 * sizeSystem))
+	pk.Domain[1] = *fft.NewDomain(uint64(8 * sizeSystem))
 
 	vk.SizeY = globalDomain[0].Cardinality
 	vk.SizeYInv = globalDomain[0].CardinalityInv
@@ -397,9 +397,9 @@ func SetupRandom(curveID ecc.ID, nbConstraints int, nbPublicInputs int) (*Provin
 	vk.GeneratorX.Set(&pk.Domain[0].Generator)
 	vk.GeneratorXInv.Set(&pk.Domain[0].GeneratorInv)
 	vk.NbPublicVariables = uint64(nbPublicInputs)
-	vk.Q = make([]kzg.Digest, 5)
-	vk.Sy = make([]kzg.Digest, 3)
-	vk.Sx = make([]kzg.Digest, 3)
+	vk.Q = make([]kzg.Digest, NUM_SELECTORS)
+	vk.Sy = make([]kzg.Digest, NUM_WITNESSES)
+	vk.Sx = make([]kzg.Digest, NUM_WITNESSES)
 
 	dkzgSRS, err := dkzg.NewSRS(vk.SizeX+3, []*big.Int{t, s}, &globalDomain[0].Generator)
 	if err != nil {
@@ -410,15 +410,16 @@ func SetupRandom(curveID ecc.ID, nbConstraints int, nbPublicInputs int) (*Provin
 	}
 
 	// public polynomials corresponding to constraints: [ placholders | constraints | assertions ]
-	pk.Q = make([][]fr.Element, 5)
+	pk.Q = make([][]fr.Element, NUM_SELECTORS)
 	for i := 0; i < len(pk.Q); i++ {
 		pk.Q[i] = make([]fr.Element, pk.Domain[0].Cardinality)
 	}
-	pk.PermutationX = make([]int64, 3 * pk.Domain[0].Cardinality)
-	pk.PermutationY = make([]int64, 3 * pk.Domain[0].Cardinality)
-	witnessesL := make([]fr.Element, pk.Domain[0].Cardinality)
-	witnessesR := make([]fr.Element, pk.Domain[0].Cardinality)
-	witnessesO := make([]fr.Element, pk.Domain[0].Cardinality)
+	pk.PermutationX = make([]int64, NUM_WITNESSES * pk.Domain[0].Cardinality)
+	pk.PermutationY = make([]int64, NUM_WITNESSES * pk.Domain[0].Cardinality)
+	witnesses := make([][]fr.Element, NUM_WITNESSES)
+	for i := 0; i < len(witnesses); i++ {
+		witnesses[i] = make([]fr.Element, pk.Domain[0].Cardinality)
+	}
 
 	sizeSystem = int(pk.Domain[0].Cardinality)
 	start := int(mpi.SelfRank) * sizeSystem
@@ -426,34 +427,26 @@ func SetupRandom(curveID ecc.ID, nbConstraints int, nbPublicInputs int) (*Provin
 	if end > nbConstraints {
 		end = nbConstraints
 	}
-	var prodL, prodR, prodM, prodO fr.Element
+	var out, tmp fr.Element
 	for i := start; i < end; i++ { // constraints
 		j := i % sizeSystem
-		witnessesL[j].SetRandom()
-		witnessesR[j].SetRandom()
-		witnessesO[j].SetRandom()
-		pk.Q[0][j].SetRandom()
-		pk.Q[1][j].SetRandom()
-		pk.Q[2][j].SetRandom()
-		pk.Q[3][j].SetRandom()
-
-		prodL.Mul(&pk.Q[0][j], &witnessesL[j])
-		prodR.Mul(&pk.Q[1][j], &witnessesR[j])
-		prodO.Mul(&pk.Q[3][j], &witnessesO[j])
-		prodM.Mul(&pk.Q[2][j], &witnessesL[j]).Mul(&prodM, &witnessesR[j])
-		pk.Q[4][j].SetZero().Sub(&pk.Q[4][j], &prodL).Sub(&pk.Q[4][j], &prodR).Sub(&pk.Q[4][j], &prodO).Sub(&pk.Q[4][j], &prodM)	
+		for k := 0; k < len(witnesses); k++ {
+			witnesses[k][j].SetRandom()
+		}
+		for k := 0; k < len(pk.Q) - 1; k++ {
+			pk.Q[k][j].SetRandom()
+		}
+		pk.Q[len(pk.Q) - 1][j].SetZero()
+		gateFunc(witnesses, pk.Q, uint64(j), &out, &tmp)
+		pk.Q[len(pk.Q) - 1][j].Neg(&out)
 	}
 
 	for i := start; i < end; i++ {
 		j := i % sizeSystem
-		pk.PermutationX[j] = int64(j)
-		pk.PermutationY[j] = int64(mpi.SelfRank)
-
-		pk.PermutationX[j + sizeSystem] = int64(j + sizeSystem)
-		pk.PermutationY[j + sizeSystem] = int64(mpi.SelfRank)
-
-		pk.PermutationX[j + 2 * sizeSystem] = int64(j + 2 * sizeSystem)
-		pk.PermutationY[j + 2 * sizeSystem] = int64(mpi.SelfRank)
+		for k := 0; k < len(witnesses); k++ {
+			pk.PermutationX[j + k * sizeSystem] = int64(j + k * sizeSystem)
+			pk.PermutationY[j + k * sizeSystem] = int64(mpi.SelfRank)
+		}
 	}
 
 	for i := 0; i < len(pk.Q); i++ {
@@ -483,7 +476,7 @@ func SetupRandom(curveID ecc.ID, nbConstraints int, nbPublicInputs int) (*Provin
 		}
 	}
 
-	return &pk, &vk, [][]fr.Element{witnessesL, witnessesR, witnessesO}, nil
+	return &pk, &vk, witnesses, nil
 }
 
 // buildPermutation builds the Permutation associated with a circuit.
@@ -583,24 +576,24 @@ func ccomputePermutationPolynomials(pk *ProvingKey) {
 
 	// Lagrange form of ID
 	IDys := getIDySmallDomain(globalDomain[0])
-	IDxs := getIDxSmallDomain(&pk.Domain[0], 3)
+	IDxs := getIDxSmallDomain(&pk.Domain[0], NUM_WITNESSES)
 
 	// Lagrange form of S1, S2, S3
-	pk.Sy = make([][]fr.Element, 3)
+	pk.Sy = make([][]fr.Element, NUM_WITNESSES)
 	for i := 0; i < len(pk.Sy); i++ {
 		pk.Sy[i] = make([]fr.Element, n)
 	}
-	pk.Sx = make([][]fr.Element, 3)
+	pk.Sx = make([][]fr.Element, NUM_WITNESSES)
 	for i := 0; i < len(pk.Sx); i++ {
 		pk.Sx[i] = make([]fr.Element, n)
 	}
 	for i := 0; i < n; i++ {
-		pk.Sy[0][i].Set(&IDys[pk.PermutationY[i]])
-		pk.Sy[1][i].Set(&IDys[pk.PermutationY[n+i]])
-		pk.Sy[2][i].Set(&IDys[pk.PermutationY[2*n+i]])
-		pk.Sx[0][i].Set(&IDxs[pk.PermutationX[i]])
-		pk.Sx[1][i].Set(&IDxs[pk.PermutationX[n+i]])
-		pk.Sx[2][i].Set(&IDxs[pk.PermutationX[2*n+i]])
+		for k := 0; k < len(pk.Sy); k++ {
+			pk.Sy[k][i].Set(&IDys[pk.PermutationY[k*n+i]])
+		}
+		for k := 0; k < len(pk.Sx); k++ {
+			pk.Sx[k][i].Set(&IDxs[pk.PermutationX[k*n+i]])
+		}
 	}
 
 	for i := 0; i < len(pk.Sy); i++ {

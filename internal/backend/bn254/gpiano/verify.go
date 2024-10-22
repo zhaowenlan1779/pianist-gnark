@@ -95,13 +95,11 @@ func Verify(proof *Proof, vk *VerifyingKey, publicWitness bn254witness.Witness) 
 	// compute the folded commitment to H: Comm(h₁) + αᵐ*Comm(h₂) + α²⁽ᵐ⁾*Comm(h₃)
 	var alphaNBigInt big.Int
 	alphaPowerN.ToBigIntRegular(&alphaNBigInt)
-	foldedHxDigest := proof.Hx[3]
-	foldedHxDigest.ScalarMultiplication(&foldedHxDigest, &alphaNBigInt)
-	foldedHxDigest.Add(&foldedHxDigest, &proof.Hx[2])
-	foldedHxDigest.ScalarMultiplication(&foldedHxDigest, &alphaNBigInt)
-	foldedHxDigest.Add(&foldedHxDigest, &proof.Hx[1])
-	foldedHxDigest.ScalarMultiplication(&foldedHxDigest, &alphaNBigInt)
-	foldedHxDigest.Add(&foldedHxDigest, &proof.Hx[0])
+	foldedHxDigest := proof.Hx[len(proof.Hx) - 1]
+	for i := len(proof.Hx) - 2; i >= 0; i-- {
+		foldedHxDigest.ScalarMultiplication(&foldedHxDigest, &alphaNBigInt)
+		foldedHxDigest.Add(&foldedHxDigest, &proof.Hx[i])
+	}
 
 	digests := []dkzg.Digest{
 		foldedHxDigest,
@@ -166,13 +164,11 @@ func Verify(proof *Proof, vk *VerifyingKey, publicWitness bn254witness.Witness) 
 	var betaPowerM fr.Element
 	betaPowerM.Exp(beta, &bSize)
 	betaPowerM.ToBigIntRegular(&bBetaPowerM)
-	foldedHyDigest := proof.Hy[3]
-	foldedHyDigest.ScalarMultiplication(&foldedHyDigest, &bBetaPowerM)
-	foldedHyDigest.Add(&foldedHyDigest, &proof.Hy[2])
-	foldedHyDigest.ScalarMultiplication(&foldedHyDigest, &bBetaPowerM)
-	foldedHyDigest.Add(&foldedHyDigest, &proof.Hy[1])
-	foldedHyDigest.ScalarMultiplication(&foldedHyDigest, &bBetaPowerM)
-	foldedHyDigest.Add(&foldedHyDigest, &proof.Hy[0])
+	foldedHyDigest := proof.Hy[len(proof.Hy) - 1]
+	for i := len(proof.Hy) - 2; i >= 0; i-- {
+		foldedHyDigest.ScalarMultiplication(&foldedHyDigest, &bBetaPowerM)
+		foldedHyDigest.Add(&foldedHyDigest, &proof.Hy[i])
+	}
 	
 	foldedProof, foldedDigest, err := kzg.FoldProof(
 		append(proof.PartialBatchedProof.ClaimedDigests,
@@ -285,6 +281,81 @@ func deriveRandomness(fs *fiatshamir.Transcript, challenge string, notSend bool,
 	}
 }
 
+const NUM_WITNESSES = 5
+const NUM_SELECTORS = 13
+
+func gateFuncSingle(witnesses []fr.Element, q []fr.Element, t0, t1 *fr.Element) {
+	t1.Mul(&q[4], &witnesses[1])
+	t1.Add(t1, &q[0])
+	t1.Mul(t1, &witnesses[0])
+	
+	t0.Mul(&q[1], &witnesses[1])
+	t0.Add(t0, t1)
+
+	t1.Mul(&q[5], &witnesses[3])
+	t1.Add(t1, &q[2])
+	t1.Mul(t1, &witnesses[2])
+	t0.Add(t0, t1)
+
+	t1.Mul(&q[3], &witnesses[3])
+	t0.Add(t0, t1)
+	
+	for i := 0; i < 4; i++ {
+		t1.Mul(&witnesses[i], &witnesses[i])
+		t1.Mul(t1, t1)
+		t1.Mul(t1, &witnesses[i])
+		t1.Mul(t1, &q[6 + i])
+		t0.Add(t0, t1)
+	}
+
+	t1.Mul(&witnesses[0], &witnesses[1])
+	t1.Mul(t1, &witnesses[2])
+	t1.Mul(t1, &witnesses[3])
+	t1.Mul(t1, &q[10])
+	t0.Add(t0, t1)
+	
+	t1.Mul(&q[11], &witnesses[4])
+	t0.Add(t0, t1)
+	
+	t0.Add(t0, &q[12])
+}
+
+func gateFunc(witnesses [][]fr.Element, q [][]fr.Element, i uint64, t0, t1 *fr.Element) {
+	t1.Mul(&q[4][i], &witnesses[1][i])
+	t1.Add(t1, &q[0][i])
+	t1.Mul(t1, &witnesses[0][i])
+	
+	t0.Mul(&q[1][i], &witnesses[1][i])
+	t0.Add(t0, t1)
+
+	t1.Mul(&q[5][i], &witnesses[3][i])
+	t1.Add(t1, &q[2][i])
+	t1.Mul(t1, &witnesses[2][i])
+	t0.Add(t0, t1)
+
+	t1.Mul(&q[3][i], &witnesses[3][i])
+	t0.Add(t0, t1)
+	
+	for j := 0; j < 4; j++ {
+		t1.Mul(&witnesses[j][i], &witnesses[j][i])
+		t1.Mul(t1, t1)
+		t1.Mul(t1, &witnesses[j][i])
+		t1.Mul(t1, &q[6 + j][i])
+		t0.Add(t0, t1)
+	}
+
+	t1.Mul(&witnesses[0][i], &witnesses[1][i])
+	t1.Mul(t1, &witnesses[2][i])
+	t1.Mul(t1, &witnesses[3][i])
+	t1.Mul(t1, &q[10][i])
+	t0.Add(t0, t1)
+	
+	t1.Mul(&q[11][i], &witnesses[4][i])
+	t0.Add(t0, t1)
+	
+	t0.Add(t0, &q[12][i])
+}
+
 // checkConstraintY checks that the constraint is satisfied
 func checkConstraintY(vk *VerifyingKey, evalsYOnBeta []fr.Element, ws, etaY, etaX, gamma, lambda, alpha, beta fr.Element) error {
 	// unpack vector evalsXOnAlpha on l, r, o, ql, qr, qm, qo, qk, s1, s2, s3, z, zmu
@@ -299,12 +370,9 @@ func checkConstraintY(vk *VerifyingKey, evalsYOnBeta []fr.Element, ws, etaY, eta
 	w := evalsYOnBeta[offset + 1]
 	hy := evalsYOnBeta[offset + 2]
 	// first part: individual constraints
-	var firstPart fr.Element
-	q[0].Mul(&q[0], &witnesses[0])
-	q[1].Mul(&q[1], &witnesses[1])
-	q[2].Mul(&q[2], &witnesses[0]).Mul(&q[2], &witnesses[1])
-	q[3].Mul(&q[3], &witnesses[2])
-	firstPart.Add(&q[0], &q[1]).Add(&firstPart, &q[2]).Add(&firstPart, &q[3]).Add(&firstPart, &q[4])
+	var firstPart fr.Element	
+	var tmp fr.Element
+	gateFuncSingle(witnesses, q, &firstPart, &tmp)
 
 	// second part:
 	// (1 - L_{n - 1})(z(, omegaX * alpha)()()() - z(, alpha)()()())
@@ -329,7 +397,6 @@ func checkConstraintY(vk *VerifyingKey, evalsYOnBeta []fr.Element, ws, etaY, eta
 	betaEta.Mul(&beta, &etaY)
 
 	prodfz.Set(&z)
-	var tmp fr.Element
 	for i := 0; i < len(witnesses); i++ {
 		tmp.Add(&IDEtaXShifted[i], &betaEta).Add(&tmp, &witnesses[i]).Add(&tmp, &gamma)
 		prodfz.Mul(&prodfz, &tmp)
