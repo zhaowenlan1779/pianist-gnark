@@ -152,9 +152,12 @@ func ProveCommon(fs *fiatshamir.Transcript,
 	)
 
 	// compute kzg commitments of bcL, bcR and bcO
+
+	step := time.Now()
 	if err := commitWitnesses(witCanonicalX, proof, pk.Vk.DKZGSRS); err != nil {
 		return nil, err
 	}
+	log.Debug().Dur("took", time.Since(step)).Msg("commitWitnesses")
 
 	// The first challenge is derived using the public data: the commitments to the permutation,
 	// the coefficients of the circuit, and the public inputs.
