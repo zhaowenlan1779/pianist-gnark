@@ -35,7 +35,7 @@ import (
 // showed here is the same as in ../exponentiate.
 
 func main() {
-	nv := 16
+	nv := 25
 	numPublicInput := 4
 
 	// Correct data: the proof passes
