@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"fmt"
 	"math/big"
 	"testing"
@@ -26,12 +27,13 @@ func fillBenchBasesG1(samplePoints []bn254.G1Affine) {
 
 func fillBenchScalars(sampleScalars []fr.Element) {
 	// ensure every words of the scalars are filled
-	var mixer fr.Element
-	mixer.SetString("7716837800905789770901243404444209691916730933998574719964609384059111546487")
 	for i := 1; i <= len(sampleScalars); i++ {
-		sampleScalars[i-1].SetUint64(uint64(i)).
-			Mul(&sampleScalars[i-1], &mixer).
-			FromMont()
+		t, err := rand.Int(rand.Reader, ecc.BN254.ScalarField())
+		if err != nil {
+			panic(err)
+		}
+
+		sampleScalars[i-1].SetBigInt(t)
 	}
 }
 
@@ -52,7 +54,7 @@ func BenchmarkMultiExp(b *testing.B) {
 		b.Run(fmt.Sprintf("%d points", using), func(b *testing.B) {
 			b.ResetTimer()
 			for j := 0; j < b.N; j++ {
-				testPoint.MultiExp(samplePoints[:using], sampleScalars[:using], ecc.MultiExpConfig{ScalarsMont: true})
+				testPoint.MultiExp(samplePoints[:using], sampleScalars[:using], ecc.MultiExpConfig{ScalarsMont: false})
 			}
 		})
 	}
