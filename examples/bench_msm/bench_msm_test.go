@@ -54,7 +54,7 @@ func BenchmarkMultiExp(b *testing.B) {
 		b.Run(fmt.Sprintf("%d points", using), func(b *testing.B) {
 			b.ResetTimer()
 			for j := 0; j < b.N; j++ {
-				testPoint.MultiExp(samplePoints[:using], sampleScalars[:using], ecc.MultiExpConfig{ScalarsMont: false})
+				testPoint.MultiExp(samplePoints[:using], sampleScalars[:using], ecc.MultiExpConfig{ScalarsMont: true})
 			}
 		})
 	}
