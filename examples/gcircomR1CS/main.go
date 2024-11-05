@@ -45,7 +45,7 @@ func main() {
 		// public data consists the polynomials describing the constants involved
 		// in the constraints, the polynomial describing the permutation ("grand
 		// product argument"), and the FFT domains.
-		repetitions := 20
+		repetitions := 10
 		start := time.Now()
 		for i := 0; i < repetitions; i++ {
 			_, _, err := gpiano.Setup(ccs, witnessPublic)

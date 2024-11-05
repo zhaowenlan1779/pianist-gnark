@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
@@ -30,6 +31,7 @@ import (
 	"github.com/consensys/gnark-crypto/ecc/bn254/fr/fft"
 	"github.com/consensys/gnark-crypto/ecc/bn254/fr/kzg"
 	"github.com/consensys/gnark/internal/backend/bn254/cs"
+	"github.com/consensys/gnark/logger"
 	"github.com/sunblaze-ucb/simpleMPI/mpi"
 
 	dkzgg "github.com/consensys/gnark-crypto/dkzg"
@@ -108,6 +110,7 @@ type VerifyingKey struct {
 
 // Setup sets proving and verifying keys
 func Setup(spr *cs.SparseR1CS, publicWitness bn254witness.Witness) (*ProvingKey, *VerifyingKey, error) {
+	log := logger.Logger().With().Str("backend", "gpiano").Logger()
 	globalDomain[0] = fft.NewDomain(mpi.WorldSize)
 	if globalDomain[0].Cardinality != mpi.WorldSize {
 		return nil, nil, fmt.Errorf("mpi.WorldSize is not a power of 2")
@@ -263,6 +266,8 @@ func Setup(spr *cs.SparseR1CS, publicWitness bn254witness.Witness) (*ProvingKey,
 		pk.Qk[j].Set(&spr.Coefficients[spr.Constraints[ii].K])
 	}
 
+	startTime := time.Now()
+
 	pk.Domain[0].FFTInverse(pk.Ql, fft.DIF)
 	pk.Domain[0].FFTInverse(pk.Qr, fft.DIF)
 	pk.Domain[0].FFTInverse(pk.Qm, fft.DIF)
@@ -314,6 +319,8 @@ func Setup(spr *cs.SparseR1CS, publicWitness bn254witness.Witness) (*ProvingKey,
 	if vk.Sx[2], err = dkzg.Commit(pk.Sx3Canonical, vk.DKZGSRS); err != nil {
 		return nil, nil, err
 	}
+
+	log.Debug().Dur("took", time.Since(startTime)).Msg("setup (latter part) done")
 
 	return &pk, &vk, nil
 }
