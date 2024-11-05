@@ -58,7 +58,7 @@ func Verify(proof *Proof, vk *VerifyingKey, publicWitness bn254witness.Witness) 
 	for i := 0; i < len(proof.witnesses); i++ {
 		witnessPtrs[i] = &proof.witnesses[i]
 	}
-	gamma, err := deriveRandomness(&fs, "gamma", false, witnessPtrs...)
+	gamma, err := deriveRandomness(&fs, "gamma", true, witnessPtrs...)
 	if err != nil {
 		return err
 	}
