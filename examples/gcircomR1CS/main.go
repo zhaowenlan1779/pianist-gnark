@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/backend/gpiano"
@@ -20,6 +21,7 @@ func main() {
 	}
 	a, b, c := ccs.GetNbVariables()
 	fmt.Println(a, b, c)
+	fmt.Println(ccs.GetNbConstraints())
 
 	{
 		// Witnesses instantiation. Witness is known only by the prover,
@@ -43,6 +45,16 @@ func main() {
 		// public data consists the polynomials describing the constants involved
 		// in the constraints, the polynomial describing the permutation ("grand
 		// product argument"), and the FFT domains.
+		repetitions := 20
+		start := time.Now()
+		for i := 0; i < repetitions; i++ {
+			_, _, err := gpiano.Setup(ccs, witnessPublic)
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
+		fmt.Printf("Setup: %d us", time.Since(start).Microseconds()/int64(repetitions))
+
 		pk, vk, err := gpiano.Setup(ccs, witnessPublic)
 		if err != nil {
 			log.Fatal(err)
