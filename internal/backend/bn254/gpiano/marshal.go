@@ -41,11 +41,11 @@ func (proof *Proof) writeTo(w io.Writer, raw bool) (int64, error) {
 	}
 
 	toEncode := []interface{}{
-		proof.witnesses,
+		proof.LRO[:],
 		&proof.Z,
 		&proof.W,
-		proof.Hx,
-		proof.Hy,
+		proof.Hx[:],
+		proof.Hy[:],
 	}
 
 	for _, v := range toEncode {
