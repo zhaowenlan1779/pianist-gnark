@@ -65,6 +65,14 @@ func main() {
 		fmt.Printf("send bytes %d, recv bytes %d\n", mpi.BytesSent, mpi.BytesReceived)
 		fmt.Printf("preprocessing for %d variables: %d\n", nv, time.Since(start).Microseconds())
 
+		if mpi.SelfRank == 0 {
+			for i := uint64(1); i < mpi.WorldSize; i++ {
+				mpi.SendBytes([]byte{1}, i)
+			}
+		} else {
+			mpi.ReceiveBytes(1, 0)
+		}
+
 		opt, err := backend.NewProverConfig()
 		start = time.Now()
 		for i := 0; i < repetitions; i++ {
