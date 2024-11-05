@@ -20,11 +20,58 @@ package gpiano
 import (
 	"fmt"
 	"io"
+	curve "github.com/consensys/gnark-crypto/ecc/bn254"
 )
 
-// WriteTo writes binary encoding of Proof to w
 func (proof *Proof) WriteTo(w io.Writer) (int64, error) {
-	return 0, fmt.Errorf("not implemented")
+	return proof.writeTo(w, false)
+}
+
+func (proof *Proof) WriteRawTo(w io.Writer) (int64, error) {
+	return proof.writeTo(w, true)
+}
+
+// WriteTo writes binary encoding of Proof to w
+func (proof *Proof) writeTo(w io.Writer, raw bool) (int64, error) {
+	var enc *curve.Encoder
+	if raw {
+		enc = curve.NewEncoder(w, curve.RawEncoding())
+	} else {
+		enc = curve.NewEncoder(w)
+	}
+
+	toEncode := []interface{}{
+		proof.witnesses,
+		&proof.Z,
+		&proof.W,
+		proof.Hx,
+		proof.Hy,
+	}
+
+	for _, v := range toEncode {
+		if err := enc.Encode(v); err != nil {
+			return enc.BytesWritten(), err
+		}
+	}
+
+	n := enc.BytesWritten()
+
+	toWrite := []io.WriterTo{
+		&proof.PartialBatchedProof,
+		&proof.PartialZShiftedProof,
+		&proof.BatchedProof,
+		&proof.WShiftedProof,
+	}
+
+	for _, v := range toWrite {
+		siz, err := v.WriteTo(w)
+		n += siz
+		if err != nil {
+			return n, err
+		}
+	}
+
+	return n, nil
 }
 
 // ReadFrom reads binary representation of Proof from r
