@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"runtime"
 
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/backend/gpiano"
@@ -13,7 +12,6 @@ import (
 )
 
 func main() {
-	runtime.GOMAXPROCS(4)
 	dir, _ := os.Getwd()
 	fmt.Println("working directory: ", dir)
 	ccs, err := ReadR1CS("r1cs")
