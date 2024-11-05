@@ -17,8 +17,12 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"log"
+	"os"
+	"strconv"
+	"time"
 
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
@@ -35,30 +39,77 @@ import (
 // showed here is the same as in ../exponentiate.
 
 func main() {
-	nv := 25
+	nv, err := strconv.Atoi(os.Args[1])
+	if err != nil {
+		log.Fatal(err)
+	}
 	numPublicInput := 4
+	var repetitions int
+	if nv <= 20 {
+		repetitions = 10
+	} else if nv <= 22 {
+		repetitions = 5
+	} else {
+		repetitions = 3
+	}
 
 	// Correct data: the proof passes
 	{
+		start := time.Now()
 		pk, vk, witnesses, err := gpiano_bn254.SetupRandom(ecc.BN254, 1<<nv, numPublicInput)
 		if err != nil {
 			log.Fatal(err)
 		}
+		fmt.Printf("send bytes %d, recv bytes %d\n", mpi.BytesSent, mpi.BytesReceived)
+		fmt.Printf("preprocessing for %d variables: %d\n", nv, time.Since(start).Microseconds())
 
 		opt, err := backend.NewProverConfig()
+		start = time.Now()
+		for i := 0; i < repetitions; i++ {
+			_, err := gpiano_bn254.ProveDirect(pk, witnesses, witnesses[0][:numPublicInput], opt)
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
+		fmt.Printf("prove for %d variables: %d\n", nv, int(time.Since(start).Microseconds())/repetitions)
+
+		bytesSentStart, bytesReceivedStart := mpi.BytesSent, mpi.BytesReceived
 		proof, err := gpiano_bn254.ProveDirect(pk, witnesses, witnesses[0][:numPublicInput], opt)
 		if err != nil {
 			log.Fatal(err)
 		}
+		fmt.Printf("send bytes %d, recv bytes %d\n", mpi.BytesSent-bytesSentStart, mpi.BytesReceived-bytesReceivedStart)
 
-		if mpi.SelfRank == 0 {
-			publicWitness := witness_bn254.New(witnesses[0][:numPublicInput])
-			err = gpiano.Verify(proof, vk, &witness.Witness{
-				Vector: &publicWitness,
-			})
+		{
+			var buf bytes.Buffer
+			siz, err := proof.WriteTo(&buf)
 			if err != nil {
 				log.Fatal(err)
 			}
+			fmt.Printf("proof size compressed for %d variables: %d\n", nv, siz)
+		}
+
+		{
+			var buf bytes.Buffer
+			siz, err := proof.WriteRawTo(&buf)
+			if err != nil {
+				log.Fatal(err)
+			}
+			fmt.Printf("proof size uncompressed for %d variables: %d\n", nv, siz)
+		}
+
+		if mpi.SelfRank == 0 {
+			publicWitness := witness_bn254.New(witnesses[0][:numPublicInput])
+			start = time.Now()
+			for i := 0; i < repetitions*10; i++ {
+				err = gpiano.Verify(proof, vk, &witness.Witness{
+					Vector: &publicWitness,
+				})
+				if err != nil {
+					log.Fatal(err)
+				}
+			}
+			fmt.Printf("verify for %d variables: %d\n", nv, int(time.Since(start).Microseconds())/(repetitions*10))
 		}
 	}
 	// Wrong data: the proof fails
@@ -104,7 +155,6 @@ func main() {
 	// 		}
 	// 	}
 	// }
-	fmt.Println("Done")
 }
 
 // printVector prints a vector of fr.Element
