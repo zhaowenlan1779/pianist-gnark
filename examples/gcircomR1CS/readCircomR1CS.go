@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"math/big"
+	"time"
 
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/frontend"
@@ -202,7 +203,9 @@ func ReadR1CS(filename string) (frontend.CompiledConstraintSystem, error) {
 	//Section 3: load witness
 
 	//Section 4: build circuit
+	start := time.Now()
 	ccs, err := frontend.Compile(ecc.BN254, scs.NewBuilder, &circuit, frontend.IgnoreUnconstrainedInputs())
+	fmt.Println(time.Since(start))
 
 	return ccs, err
 }
