@@ -155,6 +155,7 @@ func main() {
 	// 		}
 	// 	}
 	// }
+	mpi.Close()
 }
 
 // printVector prints a vector of fr.Element
