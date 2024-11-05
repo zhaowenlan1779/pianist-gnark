@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"strconv"
 	"time"
@@ -45,9 +46,10 @@ func main() {
 	}
 	numPublicInput := 4
 	var repetitions int
-	if nv <= 20 {
+	size := nv - int(math.Round(math.Log2(float64(mpi.WorldSize))))
+	if size <= 20 {
 		repetitions = 10
-	} else if nv <= 22 {
+	} else if size <= 22 {
 		repetitions = 5
 	} else {
 		repetitions = 3
