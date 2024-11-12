@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"time"
 
 	"github.com/sunblaze-ucb/simpleMPI/mpi"
 
@@ -49,15 +48,6 @@ func main() {
 		// public data consists the polynomials describing the constants involved
 		// in the constraints, the polynomial describing the permutation ("grand
 		// product argument"), and the FFT domains.
-		repetitions := 10
-		start := time.Now()
-		for i := 0; i < repetitions; i++ {
-			_, _, err := gpiano.Setup(ccs, witnessPublic)
-			if err != nil {
-				log.Fatal(err)
-			}
-		}
-		fmt.Printf("Setup: %d us", time.Since(start).Microseconds()/int64(repetitions))
 
 		pk, vk, err := gpiano.Setup(ccs, witnessPublic)
 		if err != nil {
