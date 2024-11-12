@@ -6,16 +6,17 @@ import (
 	"os"
 	"time"
 
+	"github.com/sunblaze-ucb/simpleMPI/mpi"
+
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/backend/gpiano"
 	"github.com/consensys/gnark/frontend"
-	"github.com/sunblaze-ucb/simpleMPI/mpi"
 )
 
 func main() {
 	dir, _ := os.Getwd()
 	fmt.Println("working directory: ", dir)
-	ccs, err := ReadR1CS("r1cs")
+	ccs, err := ReadR1CS("/home/pengfei/DeSNARK_R1CS/snark/data/circuit.r1cs")
 	if err != nil {
 		panic(err)
 	}
@@ -27,9 +28,12 @@ func main() {
 		// Witnesses instantiation. Witness is known only by the prover,
 		// while public w is a public data known by the verifier.
 		var w R1CSCircuit
-		w.Witness = make([]frontend.Variable, 260275)
-		for i := 0; i < len(w.Witness); i++ {
-			w.Witness[i] = frontend.Variable(0)
+		{
+			witness := ReadWitness("/home/pengfei/DeSNARK_R1CS/snark/data/witness.json")
+			w.Witness = make([]frontend.Variable, len(witness))
+			for i := 0; i < len(witness); i++ {
+				w.Witness[i] = frontend.Variable(witness[i])
+			}
 		}
 
 		witnessFull, err := frontend.NewWitness(&w, ecc.BN254)

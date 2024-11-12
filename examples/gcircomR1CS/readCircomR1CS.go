@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"math/big"
+	"os"
 	"time"
 
 	"github.com/consensys/gnark-crypto/ecc"
+	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/compiled"
 	"github.com/consensys/gnark/frontend/cs/scs"
@@ -208,4 +212,25 @@ func ReadR1CS(filename string) (frontend.CompiledConstraintSystem, error) {
 	fmt.Println(time.Since(start))
 
 	return ccs, err
+}
+
+func ReadWitness(filename string) []fr.Element {
+	file, err := os.Open(filename)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	witnesses := make([]fr.Element, 0)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if len(line) <= 1 {
+			continue
+		}
+
+		witnesses = append(witnesses, fr.Element{})
+		witnesses[len(witnesses)-1].SetString(line[2 : len(line)-1])
+	}
+	return witnesses
 }
