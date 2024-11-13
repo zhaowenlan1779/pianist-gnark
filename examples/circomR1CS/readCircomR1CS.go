@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"math/big"
+	"os"
 
 	"github.com/consensys/gnark-crypto/ecc"
+	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/compiled"
 	"github.com/consensys/gnark/frontend/cs/scs"
@@ -112,7 +116,7 @@ func (c *R1CSCircuit) Define(api frontend.API) error {
 	return nil
 }
 
-func ReadR1CS(filename string) (frontend.CompiledConstraintSystem, error) {
+func ReadR1CS(filename string, repetitions int) (frontend.CompiledConstraintSystem, error) {
 	//Read the circom R1CS file
 
 	//Map file to byte array
@@ -174,7 +178,7 @@ func ReadR1CS(filename string) (frontend.CompiledConstraintSystem, error) {
 	// Section 2: load constraints and labels
 	circuit := R1CSCircuit{}
 	circuit.Constraints = make([]compiled.R1C, nConstraints)
-	circuit.Witness = make([]frontend.Variable, nVars)
+	circuit.Witness = make([]frontend.Variable, nVars*uint32(repetitions))
 	fmt.Println("Header info: ", nVars, nOutputs, nPubIntputs, nPriInputs, nLabels, nConstraints)
 
 	s = sections[2]
@@ -187,6 +191,16 @@ func ReadR1CS(filename string) (frontend.CompiledConstraintSystem, error) {
 	}
 	if s.offset+s.size != ptr {
 		return nil, fmt.Errorf("invalid header section size")
+	}
+
+	for i := 0; i < repetitions-1; i++ {
+		constraintsCopy := make([]compiled.R1C, nConstraints)
+		for i := 0; i < int(nConstraints); i++ {
+			copy(constraintsCopy[i].L, circuit.Constraints[i].L)
+			copy(constraintsCopy[i].R, circuit.Constraints[i].R)
+			copy(constraintsCopy[i].O, circuit.Constraints[i].O)
+		}
+		circuit.Constraints = append(circuit.Constraints, constraintsCopy...)
 	}
 
 	s = sections[3]
@@ -205,4 +219,25 @@ func ReadR1CS(filename string) (frontend.CompiledConstraintSystem, error) {
 	ccs, err := frontend.Compile(ecc.BN254, scs.NewBuilder, &circuit, frontend.IgnoreUnconstrainedInputs())
 
 	return ccs, err
+}
+
+func ReadWitness(filename string) []fr.Element {
+	file, err := os.Open(filename)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	witnesses := make([]fr.Element, 0)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if len(line) <= 1 {
+			continue
+		}
+
+		witnesses = append(witnesses, fr.Element{})
+		witnesses[len(witnesses)-1].SetString(line[2 : len(line)-1])
+	}
+	return witnesses
 }
