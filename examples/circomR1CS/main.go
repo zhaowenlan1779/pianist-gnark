@@ -31,9 +31,8 @@ func main() {
 		for j := 0; j < NUM_TXS; j++ {
 			witnessIdx := rand.IntN(128)
 			witness := ReadWitness(fmt.Sprintf("/home/pengfei/DeSNARK_R1CS/snark/data/witness.%d.json", witnessIdx))
-			offset := j * len(witness)
 			for i := 0; i < len(witness); i++ {
-				w.Witness[offset+i] = frontend.Variable(witness[i])
+				w.Witness = append(w.Witness, frontend.Variable(witness[i]))
 			}
 		}
 
