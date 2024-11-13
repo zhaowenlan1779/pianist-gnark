@@ -196,9 +196,9 @@ func ReadR1CS(filename string, repetitions int) (frontend.CompiledConstraintSyst
 	for i := 0; i < repetitions-1; i++ {
 		constraintsCopy := make([]compiled.R1C, nConstraints)
 		for i := 0; i < int(nConstraints); i++ {
-			copy(constraintsCopy[i].L, circuit.Constraints[i].L)
-			copy(constraintsCopy[i].R, circuit.Constraints[i].R)
-			copy(constraintsCopy[i].O, circuit.Constraints[i].O)
+			constraintsCopy[i].L = append(compiled.LinearExpression(nil), circuit.Constraints[i].L...)
+			constraintsCopy[i].R = append(compiled.LinearExpression(nil), circuit.Constraints[i].R...)
+			constraintsCopy[i].O = append(compiled.LinearExpression(nil), circuit.Constraints[i].O...)
 		}
 		circuit.Constraints = append(circuit.Constraints, constraintsCopy...)
 	}
