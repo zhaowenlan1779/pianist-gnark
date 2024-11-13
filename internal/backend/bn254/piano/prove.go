@@ -375,6 +375,7 @@ func Prove(spr *cs.SparseR1CS, pk *ProvingKey, fullWitness bn254witness.Witness,
 		hFunc,
 		globalSRS,
 	)
+	log.Debug().Dur("took", time.Since(start)).Msg("prover done")
 	if err != nil {
 		return nil, err
 	}
