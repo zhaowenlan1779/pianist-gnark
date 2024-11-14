@@ -47,8 +47,6 @@ func main() {
 			log.Fatal(err)
 		}
 
-		repetitions := 3
-
 		// public data consists the polynomials describing the constants involved
 		// in the constraints, the polynomial describing the permutation ("grand
 		// product argument"), and the FFT domains.
