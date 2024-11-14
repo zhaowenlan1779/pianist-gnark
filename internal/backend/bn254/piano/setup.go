@@ -22,12 +22,14 @@ import (
 	"crypto/rand"
 	"errors"
 	"math/big"
+	"time"
 
 	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
 	"github.com/consensys/gnark-crypto/ecc/bn254/fr/dkzg"
 	"github.com/consensys/gnark-crypto/ecc/bn254/fr/fft"
 	"github.com/consensys/gnark-crypto/ecc/bn254/fr/kzg"
 	"github.com/consensys/gnark/internal/backend/bn254/cs"
+	"github.com/consensys/gnark/logger"
 	"github.com/sunblaze-ucb/simpleMPI/mpi"
 
 	dkzgg "github.com/consensys/gnark-crypto/dkzg"
@@ -102,6 +104,7 @@ type VerifyingKey struct {
 
 // Setup sets proving and verifying keys
 func Setup(spr *cs.SparseR1CS, publicWitness bn254witness.Witness) (*ProvingKey, *VerifyingKey, error) {
+	log := logger.Logger().With().Str("backend", "piano").Logger()
 	globalDomain[0] = fft.NewDomain(mpi.WorldSize)
 	if mpi.WorldSize < 6 {
 		globalDomain[1] = fft.NewDomain(8 * mpi.WorldSize)
@@ -118,6 +121,8 @@ func Setup(spr *cs.SparseR1CS, publicWitness bn254witness.Witness) (*ProvingKey,
 	pk.Vk = &vk
 
 	nbConstraints := len(spr.Constraints)
+
+	startTime := time.Now()
 
 	// fft domains
 	sizeSystem := uint64(nbConstraints + spr.NbPublicVariables) // spr.NbPublicVariables is for the placeholder constraints
@@ -216,6 +221,8 @@ func Setup(spr *cs.SparseR1CS, publicWitness bn254witness.Witness) (*ProvingKey,
 		return nil, nil, err
 	}
 
+	log.Debug().Int64("took", time.Since(startTime).Microseconds()).Msg("setup (first part) done")
+
 	// public polynomials corresponding to constraints: [ placholders | constraints | assertions ]
 	pk.Ql = make([]fr.Element, pk.Domain[0].Cardinality)
 	pk.Qr = make([]fr.Element, pk.Domain[0].Cardinality)
@@ -240,6 +247,8 @@ func Setup(spr *cs.SparseR1CS, publicWitness bn254witness.Witness) (*ProvingKey,
 		pk.Qo[offset+i].Set(&spr.Coefficients[spr.Constraints[i].O.CoeffID()])
 		pk.Qk[offset+i].Set(&spr.Coefficients[spr.Constraints[i].K])
 	}
+
+	startTime = time.Now()
 
 	pk.Domain[0].FFTInverse(pk.Ql, fft.DIF)
 	pk.Domain[0].FFTInverse(pk.Qr, fft.DIF)
@@ -283,6 +292,8 @@ func Setup(spr *cs.SparseR1CS, publicWitness bn254witness.Witness) (*ProvingKey,
 	if vk.S[2], err = dkzg.Commit(pk.S3Canonical, vk.DKZGSRS); err != nil {
 		return nil, nil, err
 	}
+
+	log.Debug().Int64("took", time.Since(startTime).Microseconds()).Msg("setup (latter part) done")
 
 	return &pk, &vk, nil
 
