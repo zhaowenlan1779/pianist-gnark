@@ -57,33 +57,33 @@ func main() {
 			log.Fatal(err)
 		}
 
-		for i := 0; i < repetitions-1; i++ {
-			_, _, err := piano.Setup(ccs, witnessPublic)
-			if err != nil {
-				log.Fatal(err)
-			}
-		}
+		// for i := 0; i < repetitions-1; i++ {
+		// 	_, _, err := piano.Setup(ccs, witnessPublic)
+		// 	if err != nil {
+		// 		log.Fatal(err)
+		// 	}
+		// }
 
 		proof, err := piano.Prove(ccs, pk, witnessFull)
-		for i := 0; i < repetitions-1; i++ {
-			_, err := piano.Prove(ccs, pk, witnessFull)
-			if err != nil {
-				log.Fatal(err)
-			}
-		}
+		// for i := 0; i < repetitions-1; i++ {
+		// 	_, err := piano.Prove(ccs, pk, witnessFull)
+		// 	if err != nil {
+		// 		log.Fatal(err)
+		// 	}
+		// }
 
 		if err != nil {
 			log.Fatal(err)
 		}
 		if mpi.SelfRank == 0 {
 			start := time.Now()
-			for i := 0; i < repetitions*10; i++ {
+			for i := 0; i < 10; i++ {
 				err = piano.Verify(proof, vk, witnessPublic)
 				if err != nil {
 					log.Fatal(err)
 				}
 			}
-			fmt.Printf("verify for %d variables: %d\n", num_txs, int(time.Since(start).Microseconds())/(repetitions*10))
+			fmt.Printf("verify for %d variables: %d\n", num_txs, int(time.Since(start).Microseconds())/(10))
 		}
 	}
 }
