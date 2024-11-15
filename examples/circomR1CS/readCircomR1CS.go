@@ -7,6 +7,7 @@ import (
 	"log"
 	"math/big"
 	"os"
+	"time"
 
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
@@ -216,7 +217,9 @@ func ReadR1CS(filename string, repetitions int) (frontend.CompiledConstraintSyst
 	//Section 3: load witness
 
 	//Section 4: build circuit
+	start := time.Now()
 	ccs, err := frontend.Compile(ecc.BN254, scs.NewBuilder, &circuit, frontend.IgnoreUnconstrainedInputs())
+	fmt.Printf("Compilation time: %d\n", time.Since(start).Microseconds())
 
 	return ccs, err
 }
