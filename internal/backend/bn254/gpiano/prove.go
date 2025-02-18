@@ -158,9 +158,11 @@ func ProveCommon(fs *fiatshamir.Transcript,
 	)
 
 	// compute kzg commitments of bcL, bcR and bcO
+	startCommit := time.Now()
 	if err := commitToLRO(lCanonicalX, rCanonicalX, oCanonicalX, proof, pk.Vk.DKZGSRS); err != nil {
 		return nil, err
 	}
+	pcsTime := time.Since(startCommit)
 
 	// The first challenge is derived using the public data: the commitments to the permutation,
 	// the coefficients of the circuit, and the public inputs.
@@ -209,6 +211,7 @@ func ProveCommon(fs *fiatshamir.Transcript,
 	// this may add additional arithmetic operations, but with smaller tasks
 	// we ensure that this commitment is well parallelized, without having a
 	// "unbalanced task" making the rest of the code wait too long
+	startCommit = time.Now()
 	if proof.Z, err = dkzg.Commit(zCanonicalX, pk.Vk.DKZGSRS, runtime.NumCPU()*2); err != nil {
 		return nil, err
 	}
@@ -217,6 +220,7 @@ func ProveCommon(fs *fiatshamir.Transcript,
 			return nil, err
 		}
 	}
+	pcsTime += time.Since(startCommit)
 
 	// derive lambda from the Comm(L), Comm(R), Comm(O), Com(Z)
 	lambda, err := deriveRandomness(fs, "lambda", false, &proof.Z, &proof.W)
@@ -229,6 +233,7 @@ func ProveCommon(fs *fiatshamir.Transcript,
 	// print vector of hx1, hx2, hx3, hx4
 
 	// compute kzg commitments of Hx1, Hx2, Hx3, Hx4
+	startCommit = time.Now()
 	if err := commitToQuotientX(hx1, hx2, hx3, hx4, proof, pk.Vk.DKZGSRS); err != nil {
 		return nil, err
 	}
@@ -251,6 +256,7 @@ func ProveCommon(fs *fiatshamir.Transcript,
 	if err != nil {
 		return nil, err
 	}
+	pcsTime += time.Since(startCommit)
 
 	// foldedHDigest = Comm(Hx1) + (alpha**(N))*Comm(Hx2) + (alpha**(2(N)))*Comm(Hx3) + (alpha**(3(N)))*Comm(Hx4)
 	var bAlphaPowerN, bSize big.Int
@@ -317,6 +323,7 @@ func ProveCommon(fs *fiatshamir.Transcript,
 	}
 
 	// Batch open the first list of polynomials
+	startCommit = time.Now()
 	var evalsXOnAlpha [][]fr.Element
 	proof.PartialBatchedProof, evalsXOnAlpha, err = dkzg.BatchOpenSinglePoint(
 		dkzgOpeningPolys,
@@ -325,6 +332,7 @@ func ProveCommon(fs *fiatshamir.Transcript,
 		hFunc,
 		pk.Vk.DKZGSRS,
 	)
+	pcsTime += time.Since(startCommit)
 
 	if err != nil {
 		return nil, err
@@ -372,9 +380,11 @@ func ProveCommon(fs *fiatshamir.Transcript,
 	)
 
 	// compute kzg commitments of Hy1, Hy2 and Hy3
+	startCommit = time.Now()
 	if err := commitToQuotientOnY(hy1, hy2, hy3, hy4, proof, globalSRS); err != nil {
 		return nil, err
 	}
+	pcsTime += time.Since(startCommit)
 	// derive beta
 	ts := []*curve.G1Affine{
 		&proof.PartialBatchedProof.H,
@@ -437,6 +447,7 @@ func ProveCommon(fs *fiatshamir.Transcript,
 	var digestsY []curve.G1Affine
 	digestsY = append(digestsY, proof.PartialBatchedProof.ClaimedDigests...)
 	digestsY = append(digestsY, proof.PartialZShiftedProof.ClaimedDigest, proof.W, foldedHyDigest)
+	startCommit = time.Now()
 	proof.BatchedProof, err = kzg.BatchOpenSinglePoint(
 		polysCanonicalY,
 		digestsY,
@@ -450,6 +461,9 @@ func ProveCommon(fs *fiatshamir.Transcript,
 		betaShifted,
 		globalSRS,
 	)
+	pcsTime += time.Since(startCommit)
+	log.Debug().Dur("took", pcsTime).Msg("PCS time")
+
 	log.Debug().Dur("took", time.Since(start)).Msg("prover done")
 	if err != nil {
 		return nil, err
