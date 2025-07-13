@@ -117,7 +117,7 @@ func (c *R1CSCircuit) Define(api frontend.API) error {
 	return nil
 }
 
-func ReadR1CS(filename string) (frontend.CompiledConstraintSystem, error) {
+func ReadR1CS(filename string, repetitions int) (frontend.CompiledConstraintSystem, error) {
 	//Read the circom R1CS file
 
 	//Map file to byte array
@@ -179,7 +179,7 @@ func ReadR1CS(filename string) (frontend.CompiledConstraintSystem, error) {
 	// Section 2: load constraints and labels
 	circuit := R1CSCircuit{}
 	circuit.Constraints = make([]compiled.R1C, nConstraints)
-	circuit.Witness = make([]frontend.Variable, nVars)
+	circuit.Witness = make([]frontend.Variable, nVars*uint32(repetitions))
 	fmt.Println("Header info: ", nVars, nOutputs, nPubIntputs, nPriInputs, nLabels, nConstraints)
 
 	s = sections[2]
@@ -192,6 +192,16 @@ func ReadR1CS(filename string) (frontend.CompiledConstraintSystem, error) {
 	}
 	if s.offset+s.size != ptr {
 		return nil, fmt.Errorf("invalid header section size")
+	}
+
+	for i := 0; i < repetitions-1; i++ {
+		constraintsCopy := make([]compiled.R1C, nConstraints)
+		for i := 0; i < int(nConstraints); i++ {
+			constraintsCopy[i].L = append(compiled.LinearExpression(nil), circuit.Constraints[i].L...)
+			constraintsCopy[i].R = append(compiled.LinearExpression(nil), circuit.Constraints[i].R...)
+			constraintsCopy[i].O = append(compiled.LinearExpression(nil), circuit.Constraints[i].O...)
+		}
+		circuit.Constraints = append(circuit.Constraints, constraintsCopy...)
 	}
 
 	s = sections[3]
@@ -209,7 +219,7 @@ func ReadR1CS(filename string) (frontend.CompiledConstraintSystem, error) {
 	//Section 4: build circuit
 	start := time.Now()
 	ccs, err := frontend.Compile(ecc.BN254, scs.NewBuilder, &circuit, frontend.IgnoreUnconstrainedInputs())
-	fmt.Println(time.Since(start))
+	fmt.Printf("Compilation time: %d\n", time.Since(start).Microseconds())
 
 	return ccs, err
 }

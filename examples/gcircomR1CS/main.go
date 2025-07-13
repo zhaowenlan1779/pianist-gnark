@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 
 	"github.com/sunblaze-ucb/simpleMPI/mpi"
 
@@ -13,9 +14,10 @@ import (
 )
 
 func main() {
+	num_txs, err := strconv.Atoi(os.Args[1])
 	dir, _ := os.Getwd()
 	fmt.Println("working directory: ", dir)
-	ccs, err := ReadR1CS("/home/pengfei/DeSNARK_R1CS/snark/data/circuit.r1cs")
+	ccs, err := ReadR1CS("/root/hekaton-system/polygon_0.r1cs", num_txs)
 	if err != nil {
 		panic(err)
 	}
@@ -27,11 +29,10 @@ func main() {
 		// Witnesses instantiation. Witness is known only by the prover,
 		// while public w is a public data known by the verifier.
 		var w R1CSCircuit
-		{
-			witness := ReadWitness("/home/pengfei/DeSNARK_R1CS/snark/data/witness.json")
-			w.Witness = make([]frontend.Variable, len(witness))
+		witness := ReadWitness("/root/hekaton-system/polygon_0.json")
+		for j := 0; j < num_txs; j++ {
 			for i := 0; i < len(witness); i++ {
-				w.Witness[i] = frontend.Variable(witness[i])
+				w.Witness = append(w.Witness, frontend.Variable(witness[i]))
 			}
 		}
 
